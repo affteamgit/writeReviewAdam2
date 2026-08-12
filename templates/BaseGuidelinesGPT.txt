@@ -1,0 +1,21 @@
+﻿- Keep each paragraph under 40 words.
+- Use a conversational tone, as if explaining to a friend.
+- Focus on clarity and avoid vague statements.
+- Wherever you mention number of accepted cryptocurrencies, withdrawal limits, withdrawal processing time, KYC verification time, bold the feature or phrase using Google Docs formatting (**bold**). Only bold the features - not the whole sentence.
+- Use real comparisons to other casinos from Top or Similar Casinos to explain good or bad features.
+- When comparing to other casinos, always start the sentence with "In comparison" or "For example", so that it is clear that the reviewed casino is being compared to another casino; always accompany comparisons with values for the compared casino from Top and Similar Casinos columns.
+- Include one judgment or takeaway per paragraph.
+- Use active voice. Write in first person (“I”), and address the reader as “you.”
+- Always highlight how a feature benefits or affects the reader ("you").
+- Instead of "players" or "users", use "you" - For example, instead of "This feature benefits players" use "This feature benefits you".
+- Do not address the reader at the beginning of the paragraphs.
+- When comparing casino information to a criteria, never mention the criteria itself.
+- Wherever you mention a brand name in comparison, add an internal link next to the compared casino (the links are provided next to Top and Similar casino names).
+- Occasionally, when the reviewed casino is doing something right, give it a compliment in this fassion: "Props to (casinoname) for...", "I like this about (casinoname)..." (do not be repetitive).
+- Never use Em dash ("—").
+- Only mention broken images and links or annoying pop-ups IF the casino has them. If the casino does not have them, do not mention anything about broken images or links or annoying pop-ups. This is because we do not want to mention negative features where there are none.
+- ALWAYS wrap the phrase to be bolded using **double asterisks**.
+- ALWAYS insert links using [Text](https://example.com) format.
+- Never use raw links like [https://example.com].
+- If you are comparing casinos, always mention the name as [CasinoName](https://link).
+- Never write only the link without wrapping it.

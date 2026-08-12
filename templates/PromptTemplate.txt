@@ -1,0 +1,17 @@
+NEVER USE Em dashes (—)!
+
+Write a review of "{casino}" focusing on "{section}".
+Follow these GUIDELINES:
+{guidelines}
+
+Use this STRUCTURE:
+{structure}
+
+Casino data:
+{main}
+
+Top Casinos comparison:
+{top}
+
+Similar Casinos comparison:
+{sim}

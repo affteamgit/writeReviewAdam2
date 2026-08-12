@@ -1,0 +1,85 @@
+**IF THE CASINO HAS BONUSES:**
+
+## No Deposit Bonuses
+
+* IF casino has no deposit bonuses:
+  * IF we have an exclusive no deposit bonus:
+    - ONLY IF exclusive no deposit bonus exists: Add H3 header: ### Exclusive No Deposit Bonus
+    - Describe our exclusive no deposit bonus in paragraph format (general nature only - no percentages, amounts, wagering, etc.), then list all specific details in bullet points
+    - Comment on it using two rating criteria from the bonus data
+    - IF we have multiple exclusive no deposit bonuses: Point out this is rare and describe/comment on all
+    - IF there's also a standard no deposit bonus: Briefly compare our exclusive to it (how/why exclusive is better/worse) but don't describe standard separately
+  * IF we don't have an exclusive no deposit bonus:
+    - ONLY IF standard no deposit bonus exists: Add H3 header: ### No Deposit Bonus
+    - Describe the standard no deposit bonus in paragraph format (general nature only - no percentages, amounts, wagering, etc.), then list all specific details in bullet points
+    - Comment on it using two rating criteria from the bonus data
+    - IF there are multiple standard no deposit bonuses: Point out this is rare and describe/comment on all
+  * IF the no deposit bonus isn't very high (up to 40 free spins) OR has high wagering (over 40x): Recommend another exclusive no deposit from top casinos list
+* IF casino doesn't have no deposit bonus: Mention this and recommend another top casino from spreadsheet (only do this 30% of the time, not every review)
+
+## Welcome/First Deposit Bonuses
+
+* IF casino has first deposit bonuses:
+  * IF we have an exclusive first deposit bonus:
+    - ONLY IF exclusive first deposit bonus exists: Add H3 header: ### Exclusive First Deposit Bonus
+    - Describe our exclusive first deposit bonus in paragraph format (general nature only - no percentages, amounts, wagering, etc.), then list all specific details in bullet points
+    - Comment on it using two rating criteria from the bonus data
+    - IF we have multiple exclusive first deposit bonuses: Point out this is rare and describe/comment on all
+    - IF there are also standard first deposit bonuses: Briefly compare each exclusive to its most similar standard counterpart (how/why exclusive is better/worse) but don't describe standard ones separately
+  * IF we don't have an exclusive first deposit bonus:
+    - ONLY IF standard first deposit bonus exists: Add H3 header: ### First Deposit Bonus
+    - Describe the standard first deposit bonus in paragraph format (general nature only - no percentages, amounts, wagering, etc.), then list all specific details in bullet points
+    - Comment on it using two rating criteria from the bonus data
+    - IF there are multiple standard first deposit bonuses: Point out this is rare and describe/comment on all
+  * IF the first deposit doesn't include free spins OR includes very few (less than 50) OR has high wagering (over 40x on bonus, over 40x on deposit, or over 20x on deposit+bonus): Recommend another first deposit from top casinos list
+  * IF casino also has other exclusives or unique bonuses (not no deposit or first deposit):
+    - ONLY IF other exclusive bonuses exist: Add H3 header: ### Other Exclusive Bonuses
+    - Describe and comment on them all here. Include comment if such bonus is better/worse than first deposit bonus and why.
+* IF casino doesn't have first deposit bonus:
+  * IF it has other exclusives or unique bonuses (not no deposit or first deposit):
+    - ONLY IF other exclusive bonuses exist: Add H3 header: ### Other Exclusive Bonuses
+    - Describe and comment on them all here. Include comment if such bonus is better/worse than having a first deposit match bonus and why.
+  * IF it doesn't have any other exclusives or unique bonuses: Say there are no welcome deposit casino bonuses and recommend one of the top first deposit casinos instead.
+
+## Sports Bonuses
+
+* ONLY IF casino has sports bonuses: Add H3 header: ### Sports Bonuses
+* IF casino has sports bonuses: Briefly list them here. No need to comment on them.
+* IF casino doesn't have sports bonuses: DO NOT include this section at all.
+
+## Faucet Promotions
+
+* ONLY IF casino has faucet promotions: Add H3 header: ### Faucet Promotions
+* IF casino has faucet promotions: List them, mention them as a free way to get money and an interesting way to keep players engaged. No need to comment on them.
+* IF casino doesn't have faucet promotions: DO NOT include this section at all.
+
+**IF THE CASINO HAS NO BONUSES:**
+* Explicitly state that the casino has no welcome bonuses available (no deposit bonuses and no first deposit bonuses)
+* Mention this as a significant limitation for players looking for bonus value
+* Point out this is a missed opportunity for the casino to attract new players
+* Recommend one or two alternative casinos from the top casinos list that do offer welcome bonuses
+
+**BONUS DESCRIPTION FORMAT:**
+Write the bonus in a paragraph describing ONLY the general nature/type of bonus without any specific details (percentages, amounts, deposit requirements, wagering, etc.), then include ALL specific bonus details in bullet points.
+
+Example format:
+Casino offers an exclusive first deposit bonus that provides both a match bonus and free spins to boost your initial bankroll.
+
+* 120% up to $500 + 100 free spins first deposit bonus + 5 lottery tickets
+* $10 min. deposit  
+* Wagering: 35x on bonus and 40x on free spins
+
+Then comes the comment and anything else. Do NOT include ANY specific bonus details in the paragraph - only general description of what type of bonus it is.
+
+**BONUS COMMENTING GUIDELINES:**
+Choose two (any two) rating criteria that's mentioned with the bonus and comment on them. If there are less than two criteria mentioned with the bonus, comment on all that are there, and add more from the average criteria to comment on two things altogether.
+
+**RATING CRITERIA REFERENCE:**
+* First deposit percentage: 100-125% is average, below is low, above is generous
+* First deposit value: below $500 is low, above 1.5 BTC or $10k is high and very generous
+* First deposit free spins: 100 is average, below is low, above is generous
+* Minimum deposit: $10-30 is average, below is very player-friendly, above is high
+* Wagering requirements: 40x on bonus is average, below 40x is low and player-friendly, above 40x is high and less favorable. If wagering is on bonus+deposit, mention this as typically being higher and less favorable for players
+* No deposit free spins: 20-30 is average, below is low, above is generous
+
+For each bonus component, explain how it benefits or affects the reader and why this should matter to them. Use short sentences, maximum 20 words per sentence.
