@@ -161,38 +161,6 @@ def extract_casino_names_from_data(comparison_data):
 
     return casino_names
 
-def extract_casino_links_map(comparison_data):
-    """Extract casino names and their corresponding links from comparison data.
-    Returns a dictionary mapping casino names to their URLs.
-    Assumes format like 'CasinoName (link): data...' or '[CasinoName](link): data...'
-    """
-    casino_links = {}
-
-    # Pattern to match both formats:
-    # - "[CasinoName](https://...)"
-    # - "CasinoName (https://...)"
-    patterns = [
-        (r'\[([^\]]+)\]\((https?://[^\)]+)\)', 1, 2),  # [CasinoName](link) - groups 1=name, 2=url
-        (r'^([A-Z][A-Za-z0-9\s\.]+?)\s*\((https?://[^\)]+)\)', 1, 2),  # CasinoName (link) - groups 1=name, 2=url
-    ]
-
-    for line in comparison_data.split('\n'):
-        line = line.strip()
-        if not line or line.startswith('[No '):
-            continue
-
-        for pattern, name_group, url_group in patterns:
-            match = re.search(pattern, line)
-            if match:
-                casino_name = match.group(name_group).strip()
-                casino_url = match.group(url_group).strip()
-                if casino_name and casino_url and casino_name not in casino_links:
-                    casino_links[casino_name] = casino_url
-                    print(f"Extracted link: {casino_name} -> {casino_url}")
-                break
-
-    return casino_links
-
 def get_next_comparison_casino(available_casinos, used_casinos_tracker):
     """Select next casino using round-robin logic.
 
@@ -560,74 +528,120 @@ def rewrite_review_with_adam(review_content):
         # Return original content if everything fails
         return f"[Rewrite failed - using original content]\n\n{review_content}"
 
-def add_internal_links_to_casinos(review_content, casino_links_map, reviewed_casino_name):
-    """Add internal links to casino names mentioned in the review.
+MIN_CASINO_SLUG_LENGTH = 3  # skip pathologically short slugs to avoid false-positive matches
+
+def get_gamblineers_casino_review_map():
+    """Fetch the live Gamblineers post-sitemap and build a map of casino review URL
+    slug -> full URL, used to auto-link casino mentions to their own Gamblineers review.
+
+    Casino reviews are published at /<slug>-casino-review/ or /<slug>-review/ - both
+    patterns exist in production (e.g. bitstarz-casino-review/ and cloudbet-review/).
+
+    Fetched fresh every time internal linking runs, so newly published reviews become
+    linkable without any manual list maintenance. Fails open (returns {}) on any error,
+    so a transient network issue never blocks review generation - callers must treat an
+    empty map as "skip internal linking for this run".
+    """
+    try:
+        response = requests.get("https://gamblineers.com/post-sitemap.xml", timeout=10)
+        response.raise_for_status()
+        urls = re.findall(r'<loc>(https://gamblineers\.com/[^<]+)</loc>', response.text)
+
+        review_map = {}
+        for url in urls:
+            path = url.rstrip('/').rsplit('/', 1)[-1]
+            if path.endswith('-casino-review'):
+                slug = path[:-len('-casino-review')]
+            elif path.endswith('-review'):
+                slug = path[:-len('-review')]
+            else:
+                continue
+            if slug:
+                review_map[slug] = url
+
+        print(f"Fetched {len(review_map)} casino review URLs from the live sitemap")
+        return review_map
+    except Exception as e:
+        print(f"Failed to fetch/parse Gamblineers sitemap, skipping internal linking: {e}")
+        return {}
+
+def link_casino_mentions(review_text, reviewed_casino_name, casino_review_map=None):
+    """Auto-link mentions of other Gamblineers-reviewed casinos to their review pages.
+
+    Matching is based on each casino's URL slug (e.g. "bc-game" from bc-game-review/),
+    tolerant of how the writer punctuates/spaces the name in prose (so "BC.Game",
+    "BC Game", and "bc-game" all match), while preserving the writer's original
+    casing/punctuation in the visible link text - no attempt is made to "correct" a
+    brand's display casing. Skips the casino being reviewed, and never links inside
+    text that's already bold or already a link, to avoid producing broken nested
+    markdown.
 
     Args:
-        review_content: The review text content
-        casino_links_map: Dictionary mapping casino names to their URLs
-        reviewed_casino_name: Name of the casino being reviewed (to exclude from linking)
+        review_text: The review text content
+        reviewed_casino_name: Name of the casino being reviewed (excluded from linking)
+        casino_review_map: Optional pre-fetched slug->url map (mainly for testing);
+            fetched live from the sitemap if not provided
 
     Returns:
-        Review content with casino names linked in [CasinoName](url) format
+        Review content with recognized casino names linked in [CasinoName](url) format
     """
-    if not casino_links_map:
-        print("No casino links found to add")
-        return review_content
+    if casino_review_map is None:
+        casino_review_map = get_gamblineers_casino_review_map()
+    if not casino_review_map:
+        return review_text
 
-    print(f"Adding internal links for {len(casino_links_map)} casinos...")
+    reviewed_key = re.sub(r'[^a-z0-9]', '', reviewed_casino_name.lower())
 
-    # Sort casino names by length (longest first) to avoid partial matches
-    sorted_casinos = sorted(casino_links_map.keys(), key=len, reverse=True)
+    # Longest slug first so a shorter slug can't grab part of a longer, more specific match.
+    candidates = sorted(casino_review_map.items(), key=lambda kv: -len(kv[0]))
 
-    # Remove the reviewed casino from the list
-    sorted_casinos = [c for c in sorted_casinos if c.lower() != reviewed_casino_name.lower()]
+    linked_text = review_text
+    for slug, url in candidates:
+        key = re.sub(r'[^a-z0-9]', '', slug.lower())
+        if len(key) < MIN_CASINO_SLUG_LENGTH or key == reviewed_key:
+            continue
 
-    linked_content = review_content
+        chunks = [c for c in slug.split('-') if c]
+        if not chunks:
+            continue
 
-    for casino_name in sorted_casinos:
-        casino_url = casino_links_map[casino_name]
+        # Allow optional spaces/periods/hyphens between the slug's own words (so the
+        # "bc-game" slug matches "BC.Game", "BC Game", "bc-game", "BCGame"), but never
+        # bridge into unrelated neighboring words - \b anchors the whole phrase.
+        pattern = re.compile(
+            r'\b' + r'[\s\.\-]*'.join(re.escape(c) for c in chunks) + r'\b',
+            re.IGNORECASE
+        )
 
-        # Create a pattern that matches the casino name but NOT if it's already in a link
-        # This prevents double-linking and linking casino names that are already formatted
-        # Pattern explanation:
-        # - Negative lookbehind: (?<!\[) - not preceded by [
-        # - Negative lookbehind: (?<!\]) - not preceded by ]
-        # - Negative lookbehind: (?<!\() - not preceded by (
-        # - The casino name (escaped for regex special chars)
-        # - Negative lookahead: (?!\]) - not followed by ]
-        # - Negative lookahead: (?!\() - not followed by (
+        # Recompute protected (already-bold / already-linked) ranges fresh each pass,
+        # since earlier candidates in this loop may have inserted new links already.
+        protected = [False] * len(linked_text)
+        for span in re.finditer(r'\*\*.*?\*\*', linked_text):
+            for i in range(*span.span()):
+                protected[i] = True
+        for span in re.finditer(r'\[[^\]]*\]\(https?://[^\)]+\)', linked_text):
+            for i in range(*span.span()):
+                protected[i] = True
 
-        # Escape special regex characters in casino name
-        escaped_name = re.escape(casino_name)
+        pieces = []
+        last_end = 0
+        linked_count = 0
+        for match in pattern.finditer(linked_text):
+            start, end = match.span()
+            if any(protected[start:end]):
+                continue
+            pieces.append(linked_text[last_end:start])
+            pieces.append(f'[{match.group(0)}]({url})')
+            last_end = end
+            linked_count += 1
+        pieces.append(linked_text[last_end:])
+        linked_text = ''.join(pieces)
 
-        # Pattern to match casino name not already in link format
-        pattern = r'(?<!\[)(?<!\])(?<!\()' + escaped_name + r'(?!\])(?!\()'
-
-        # Replace with markdown link format
-        replacement = f'[{casino_name}]({casino_url})'
-
-        # Use a function to check each match and only replace if not already linked
-        def replace_if_not_linked(match):
-            # Get surrounding context to double-check
-            start = max(0, match.start() - 10)
-            end = min(len(linked_content), match.end() + 10)
-            context = linked_content[start:end]
-
-            # If the context already contains link markers, skip
-            if '](' in context or '[' in context[:match.start()-start+1]:
-                return match.group(0)
-
-            return replacement
-
-        # Count how many replacements we'll make
-        matches = list(re.finditer(pattern, linked_content))
-        if matches:
-            print(f"Linking {len(matches)} mention(s) of '{casino_name}'")
-            linked_content = re.sub(pattern, replacement, linked_content)
+        if linked_count:
+            print(f"Linking {linked_count} mention(s) of '{slug}' -> {url}")
 
     print("Internal linking completed")
-    return linked_content
+    return linked_text
 
 def fix_bullet_points(review_content):
     """Fix all formatting issues from Adam's rewrite for proper Google Docs display."""
@@ -996,6 +1010,16 @@ def write_review_link_to_sheet(link):
     ).execute()
 
 def insert_parsed_text_with_formatting(docs_service, doc_id, review_text):
+    # Bullet lines carry a leading "- " (see fix_bullet_points()). Record which lines are
+    # bullets before stripping any markup, then strip that marker here - it gets replaced
+    # by a real Google Docs bullet glyph below instead of staying as a literal "-" character.
+    original_lines = review_text.split('\n')
+    bullet_line_flags = [line.startswith('- ') for line in original_lines]
+    review_text = '\n'.join(
+        line[2:] if is_bullet else line
+        for line, is_bullet in zip(original_lines, bullet_line_flags)
+    )
+
     # Parse the text into clean text and extract formatting positions
     plain_text = ""
     formatting_requests = []
@@ -1065,6 +1089,45 @@ def insert_parsed_text_with_formatting(docs_service, doc_id, review_text):
             body={"requests": formatting_requests}
         ).execute()
 
+    # Turn bullet lines into real Google Docs bulleted lists (proper glyph + hanging
+    # indent) instead of a plain paragraph starting with a literal "-" character.
+    # Line count/order is identical between the stripped input text and plain_text
+    # (markup stripping never adds/removes lines), so bullet_line_flags still lines up.
+    plain_lines = plain_text.split('\n')
+    bullet_requests = []
+    line_cursor = 1
+    run_start = None
+    run_end = None
+    for i, line in enumerate(plain_lines):
+        is_bullet = i < len(bullet_line_flags) and bullet_line_flags[i]
+        if is_bullet:
+            if run_start is None:
+                run_start = line_cursor
+            run_end = line_cursor + len(line)
+        elif run_start is not None:
+            bullet_requests.append({
+                "createParagraphBullets": {
+                    "range": {"startIndex": run_start, "endIndex": run_end},
+                    "bulletPreset": "BULLET_DISC_CIRCLE_SQUARE"
+                }
+            })
+            run_start = None
+        line_cursor += len(line) + 1  # +1 for the '\n' separating lines
+
+    if run_start is not None:
+        bullet_requests.append({
+            "createParagraphBullets": {
+                "range": {"startIndex": run_start, "endIndex": run_end},
+                "bulletPreset": "BULLET_DISC_CIRCLE_SQUARE"
+            }
+        })
+
+    if bullet_requests:
+        docs_service.documents().batchUpdate(
+            documentId=doc_id,
+            body={"requests": bullet_requests}
+        ).execute()
+
     doc = docs_service.documents().get(documentId=doc_id).execute()
     header_requests = []
     section_titles = ["Overview", "General", "Payments", "Games", "Responsible Gambling", "Bonuses"]
@@ -1124,7 +1187,6 @@ def main():
         st.session_state.casino_name = None
         st.session_state.rewritten_review = None
         st.session_state.awaiting_overview = False
-        st.session_state.casino_links_map = {}
         st.session_state.presentation_plan = {}
     
     # If review is completed and awaiting overview input
@@ -1198,11 +1260,10 @@ def main():
                         # Fix bullet points before uploading
                         final_review = fix_bullet_points(final_review)
 
-                        # Add internal links to casino names
+                        # Add internal links to casino names (fetches the live sitemap)
                         st.info("🔗 Adding internal links to comparison casinos...")
-                        final_review = add_internal_links_to_casinos(
+                        final_review = link_casino_mentions(
                             final_review,
-                            st.session_state.casino_links_map,
                             st.session_state.casino_name
                         )
 
@@ -1258,11 +1319,10 @@ def main():
                     # Fix bullet points before uploading
                     final_review = fix_bullet_points(final_review)
 
-                    # Add internal links to casino names
+                    # Add internal links to casino names (fetches the live sitemap)
                     st.info("🔗 Adding internal links to comparison casinos...")
-                    final_review = add_internal_links_to_casinos(
+                    final_review = link_casino_mentions(
                         final_review,
-                        st.session_state.casino_links_map,
                         st.session_state.casino_name
                     )
 
@@ -1371,20 +1431,6 @@ def main():
             # (awaiting_overview branch) can reuse the same stylistic opening-hook direction.
             st.session_state.presentation_plan = presentation_plan
 
-            # Extract casino links from all comparison data
-            print("Extracting casino links from comparison data...")
-            casino_links_map = {}
-            for section_name, section_data in secs.items():
-                # Extract links from top casinos
-                top_links = extract_casino_links_map(section_data.get("top", ""))
-                casino_links_map.update(top_links)
-
-                # Extract links from similar casinos
-                sim_links = extract_casino_links_map(section_data.get("sim", ""))
-                casino_links_map.update(sim_links)
-
-            print(f"Extracted {len(casino_links_map)} unique casino links")
-
             # Generate all sections in parallel
             progress_placeholder.markdown("## Generating review sections in parallel...")
             parallel_results = generate_sections_parallel(casino, secs, sorted_comments, templates, btc_str, presentation_plan)
@@ -1407,9 +1453,8 @@ def main():
 
             rewritten_review = rewrite_review_with_adam(initial_review)
 
-            # Step 3: Store rewritten review and casino links, then prompt for Overview input
+            # Step 3: Store rewritten review, then prompt for Overview input
             st.session_state.rewritten_review = rewritten_review
-            st.session_state.casino_links_map = casino_links_map
             st.session_state.awaiting_overview = True
             st.session_state.casino_name = casino
             
