@@ -565,56 +565,23 @@ def get_gamblineers_casino_review_map():
         print(f"Failed to fetch/parse Gamblineers sitemap, skipping internal linking: {e}")
         return {}
 
-def link_casino_mentions(review_text, reviewed_casino_name, casino_review_map=None):
-    """Auto-link mentions of other Gamblineers-reviewed casinos to their review pages.
-
-    Matching is based on each casino's URL slug (e.g. "bc-game" from bc-game-review/),
-    tolerant of how the writer punctuates/spaces the name in prose (so "BC.Game",
-    "BC Game", and "bc-game" all match), while preserving the writer's original
-    casing/punctuation in the visible link text - no attempt is made to "correct" a
-    brand's display casing. Skips the casino being reviewed, and never links inside
-    text that's already bold or already a link, to avoid producing broken nested
-    markdown.
+def _link_patterns(text, pattern_url_pairs):
+    """Shared matcher: wrap each safe match of a compiled regex with a markdown link to
+    its URL, preserving the exact text matched (casing/punctuation untouched). Skips any
+    match that overlaps text already bold or already a link, to avoid nested/broken
+    markdown, and recomputes those protected ranges fresh after each pattern is applied
+    since earlier patterns may have inserted new links.
 
     Args:
-        review_text: The review text content
-        reviewed_casino_name: Name of the casino being reviewed (excluded from linking)
-        casino_review_map: Optional pre-fetched slug->url map (mainly for testing);
-            fetched live from the sitemap if not provided
+        text: source text
+        pattern_url_pairs: iterable of (compiled_pattern, url), most-specific-first -
+            once a span is linked, later patterns can't re-claim any part of it.
 
     Returns:
-        Review content with recognized casino names linked in [CasinoName](url) format
+        Text with matches wrapped as [matched text](url)
     """
-    if casino_review_map is None:
-        casino_review_map = get_gamblineers_casino_review_map()
-    if not casino_review_map:
-        return review_text
-
-    reviewed_key = re.sub(r'[^a-z0-9]', '', reviewed_casino_name.lower())
-
-    # Longest slug first so a shorter slug can't grab part of a longer, more specific match.
-    candidates = sorted(casino_review_map.items(), key=lambda kv: -len(kv[0]))
-
-    linked_text = review_text
-    for slug, url in candidates:
-        key = re.sub(r'[^a-z0-9]', '', slug.lower())
-        if len(key) < MIN_CASINO_SLUG_LENGTH or key == reviewed_key:
-            continue
-
-        chunks = [c for c in slug.split('-') if c]
-        if not chunks:
-            continue
-
-        # Allow optional spaces/periods/hyphens between the slug's own words (so the
-        # "bc-game" slug matches "BC.Game", "BC Game", "bc-game", "BCGame"), but never
-        # bridge into unrelated neighboring words - \b anchors the whole phrase.
-        pattern = re.compile(
-            r'\b' + r'[\s\.\-]*'.join(re.escape(c) for c in chunks) + r'\b',
-            re.IGNORECASE
-        )
-
-        # Recompute protected (already-bold / already-linked) ranges fresh each pass,
-        # since earlier candidates in this loop may have inserted new links already.
+    linked_text = text
+    for pattern, url in pattern_url_pairs:
         protected = [False] * len(linked_text)
         for span in re.finditer(r'\*\*.*?\*\*', linked_text):
             for i in range(*span.span()):
@@ -638,9 +605,220 @@ def link_casino_mentions(review_text, reviewed_casino_name, casino_review_map=No
         linked_text = ''.join(pieces)
 
         if linked_count:
-            print(f"Linking {linked_count} mention(s) of '{slug}' -> {url}")
+            print(f"Linked {linked_count} mention(s) matching '{pattern.pattern}' -> {url}")
 
-    print("Internal linking completed")
+    return linked_text
+
+def link_casino_mentions(review_text, reviewed_casino_name, casino_review_map=None):
+    """Auto-link mentions of other Gamblineers-reviewed casinos to their review pages.
+
+    Matching is based on each casino's URL slug (e.g. "bc-game" from bc-game-review/),
+    tolerant of how the writer punctuates/spaces the name in prose (so "BC.Game",
+    "BC Game", and "bc-game" all match), while preserving the writer's original
+    casing/punctuation in the visible link text - no attempt is made to "correct" a
+    brand's display casing. Skips the casino being reviewed.
+
+    Args:
+        review_text: The review text content
+        reviewed_casino_name: Name of the casino being reviewed (excluded from linking)
+        casino_review_map: Optional pre-fetched slug->url map (mainly for testing);
+            fetched live from the sitemap if not provided
+
+    Returns:
+        Review content with recognized casino names linked in [CasinoName](url) format
+    """
+    if casino_review_map is None:
+        casino_review_map = get_gamblineers_casino_review_map()
+    if not casino_review_map:
+        return review_text
+
+    reviewed_key = re.sub(r'[^a-z0-9]', '', reviewed_casino_name.lower())
+
+    # Longest slug first so a shorter slug can't grab part of a longer, more specific match.
+    candidates = sorted(casino_review_map.items(), key=lambda kv: -len(kv[0]))
+
+    pairs = []
+    for slug, url in candidates:
+        key = re.sub(r'[^a-z0-9]', '', slug.lower())
+        if len(key) < MIN_CASINO_SLUG_LENGTH or key == reviewed_key:
+            continue
+        chunks = [c for c in slug.split('-') if c]
+        if not chunks:
+            continue
+        # Allow optional spaces/periods/hyphens between the slug's own words (so the
+        # "bc-game" slug matches "BC.Game", "BC Game", "bc-game", "BCGame"), but never
+        # bridge into unrelated neighboring words - \b anchors the whole phrase.
+        pattern = re.compile(
+            r'\b' + r'[\s\.\-]*'.join(re.escape(c) for c in chunks) + r'\b',
+            re.IGNORECASE
+        )
+        pairs.append((pattern, url))
+
+    linked_text = _link_patterns(review_text, pairs)
+    print("Casino mention linking completed")
+    return linked_text
+
+# Cryptocurrency landing pages (name/ticker -> Gamblineers page). Curated by hand from the
+# page-sitemap rather than fetched live: unlike casino reviews, these don't get added often,
+# and their URL slugs aren't consistent enough (-casinos/-gambling/-sports-betting) to safely
+# auto-discover without also sweeping in unrelated "-casinos" pages (e.g. high-roller-casinos).
+# Matching is case-sensitive since several of these names/tickers are also common English
+# words (Compound, Maker, Optimism, Sandbox, Dash, Gala, Amp, Kava) - requiring the proper-
+# noun capitalization they'd carry as a coin name avoids linking generic lowercase usage.
+CRYPTO_PAGE_MAP = {
+    "Dogecoin": "https://gamblineers.com/dogecoin-casinos/", "DOGE": "https://gamblineers.com/dogecoin-casinos/",
+    "Litecoin": "https://gamblineers.com/litecoin-casinos/", "LTC": "https://gamblineers.com/litecoin-casinos/",
+    "Monero": "https://gamblineers.com/monero-casinos/", "XMR": "https://gamblineers.com/monero-casinos/",
+    "Solana": "https://gamblineers.com/solana-casinos/", "SOL": "https://gamblineers.com/solana-casinos/",
+    "Cardano": "https://gamblineers.com/cardano-casinos/", "ADA": "https://gamblineers.com/cardano-casinos/",
+    "Ripple": "https://gamblineers.com/ripple-casinos/", "XRP": "https://gamblineers.com/ripple-casinos/",
+    "Tron": "https://gamblineers.com/tron-casinos/", "TRX": "https://gamblineers.com/tron-casinos/",
+    "Chainlink": "https://gamblineers.com/chainlink-casinos/", "LINK": "https://gamblineers.com/chainlink-casinos/",
+    "Polkadot": "https://gamblineers.com/polkadot-casinos/", "DOT": "https://gamblineers.com/polkadot-casinos/",
+    "Uniswap": "https://gamblineers.com/uniswap-casinos/", "UNI": "https://gamblineers.com/uniswap-casinos/",
+    "Dash": "https://gamblineers.com/dash-casinos/",
+    "Tether": "https://gamblineers.com/tether-gambling/", "USDT": "https://gamblineers.com/tether-gambling/",
+    "Ethereum Classic": "https://gamblineers.com/ethereum-classic-casinos/", "ETC": "https://gamblineers.com/ethereum-classic-casinos/",
+    "Ethereum": "https://gamblineers.com/ethereum-gambling/", "ETH": "https://gamblineers.com/ethereum-gambling/",
+    "USD Coin": "https://gamblineers.com/usd-coin-casinos/", "USDC": "https://gamblineers.com/usd-coin-casinos/",
+    "Binance Coin": "https://gamblineers.com/binance-coin-casinos/", "BNB": "https://gamblineers.com/binance-coin-casinos/",
+    "Binance USD": "https://gamblineers.com/binance-usd-casinos/", "BUSD": "https://gamblineers.com/binance-usd-casinos/",
+    "Bitcoin Cash": "https://gamblineers.com/bitcoin-cash-casinos/", "BCH": "https://gamblineers.com/bitcoin-cash-casinos/",
+    "Bitcoin Gold": "https://gamblineers.com/bitcoin-gold-casinos/", "BTG": "https://gamblineers.com/bitcoin-gold-casinos/",
+    "Bitcoin SV": "https://gamblineers.com/bitcoin-sv-casinos/", "BSV": "https://gamblineers.com/bitcoin-sv-casinos/",
+    "Wrapped Bitcoin": "https://gamblineers.com/wrapped-bitcoin-casinos/", "WBTC": "https://gamblineers.com/wrapped-bitcoin-casinos/",
+    "BitTorrent": "https://gamblineers.com/bittorrent-casinos/", "BTT": "https://gamblineers.com/bittorrent-casinos/",
+    "Shiba Inu": "https://gamblineers.com/shiba-inu-casinos/", "SHIB": "https://gamblineers.com/shiba-inu-casinos/",
+    "Dai": "https://gamblineers.com/dai-casinos/",
+    "Decentraland": "https://gamblineers.com/decentraland-casinos/", "MANA": "https://gamblineers.com/decentraland-casinos/",
+    "DigiByte": "https://gamblineers.com/digibyte-casinos/", "DGB": "https://gamblineers.com/digibyte-casinos/",
+    "Enjin": "https://gamblineers.com/enjin-casinos/", "ENJ": "https://gamblineers.com/enjin-casinos/",
+    "Fantom": "https://gamblineers.com/fantom-casinos/", "FTM": "https://gamblineers.com/fantom-casinos/",
+    "Filecoin": "https://gamblineers.com/filecoin-casinos/", "FIL": "https://gamblineers.com/filecoin-casinos/",
+    "Gala": "https://gamblineers.com/gala-casinos/",
+    "IoTeX": "https://gamblineers.com/iotex-casinos/",
+    "Kusama": "https://gamblineers.com/kusama-casinos/", "KSM": "https://gamblineers.com/kusama-casinos/",
+    "NEM": "https://gamblineers.com/nem-casinos/", "XEM": "https://gamblineers.com/nem-casinos/",
+    "OmiseGO": "https://gamblineers.com/omisego-casinos/", "OMG": "https://gamblineers.com/omisego-casinos/",
+    "PancakeSwap": "https://gamblineers.com/pancakeswap-casinos/", "CAKE": "https://gamblineers.com/pancakeswap-casinos/",
+    "Pax Dollar": "https://gamblineers.com/pax-dollar-casinos/", "USDP": "https://gamblineers.com/pax-dollar-casinos/",
+    "Polygon": "https://gamblineers.com/polygon-casinos/", "MATIC": "https://gamblineers.com/polygon-casinos/",
+    "Sandbox": "https://gamblineers.com/sandbox-casinos/", "The Sandbox": "https://gamblineers.com/sandbox-casinos/", "SAND": "https://gamblineers.com/sandbox-casinos/",
+    "SushiSwap": "https://gamblineers.com/sushiswap-casinos/", "SUSHI": "https://gamblineers.com/sushiswap-casinos/",
+    "Terra": "https://gamblineers.com/terra-casinos/", "LUNA": "https://gamblineers.com/terra-casinos/",
+    "TrueUSD": "https://gamblineers.com/true-usd-casinos/", "TUSD": "https://gamblineers.com/true-usd-casinos/",
+    "VeChain": "https://gamblineers.com/vechain-casinos/", "VET": "https://gamblineers.com/vechain-casinos/",
+    "Yearn Finance": "https://gamblineers.com/yearn-finance-casinos/", "YFI": "https://gamblineers.com/yearn-finance-casinos/",
+    "Zilliqa": "https://gamblineers.com/zilliqa-casinos/", "ZIL": "https://gamblineers.com/zilliqa-casinos/",
+    "Bonk": "https://gamblineers.com/bonk-casinos/", "BONK": "https://gamblineers.com/bonk-casinos/",
+    "Worldcoin": "https://gamblineers.com/worldcoin-casinos/", "WLD": "https://gamblineers.com/worldcoin-casinos/",
+    "ApeCoin": "https://gamblineers.com/apecoin-casinos/", "APE": "https://gamblineers.com/apecoin-casinos/",
+    "Near Protocol": "https://gamblineers.com/near-protocol-casinos/", "NEAR": "https://gamblineers.com/near-protocol-casinos/",
+    "Kava": "https://gamblineers.com/kava-casinos/",
+    "Neo": "https://gamblineers.com/neo-casinos/",
+    "Maker": "https://gamblineers.com/maker-casinos/", "MKR": "https://gamblineers.com/maker-casinos/",
+    "Arbitrum": "https://gamblineers.com/arbitrum-casinos/", "ARB": "https://gamblineers.com/arbitrum-casinos/",
+    "Chiliz": "https://gamblineers.com/chiliz-casinos/", "CHZ": "https://gamblineers.com/chiliz-casinos/",
+    "Compound": "https://gamblineers.com/compound-casinos/", "COMP": "https://gamblineers.com/compound-casinos/",
+    "Helium": "https://gamblineers.com/helium-casinos/", "HNT": "https://gamblineers.com/helium-casinos/",
+    "Internet Computer": "https://gamblineers.com/internet-computer-casinos/", "ICP": "https://gamblineers.com/internet-computer-casinos/",
+    "Kaspa": "https://gamblineers.com/kaspa-casinos/", "KAS": "https://gamblineers.com/kaspa-casinos/",
+    "Klaytn": "https://gamblineers.com/klaytn-casinos/",
+    "MultiversX": "https://gamblineers.com/multiversx-casinos/", "EGLD": "https://gamblineers.com/multiversx-casinos/",
+    "Nexo": "https://gamblineers.com/nexo-casinos/",
+    "Oasis": "https://gamblineers.com/oasis-casinos/", "ROSE": "https://gamblineers.com/oasis-casinos/",
+    "Optimism": "https://gamblineers.com/optimism-casinos/", "OP": "https://gamblineers.com/optimism-casinos/",
+    "Pax Gold": "https://gamblineers.com/pax-gold-casinos/", "PAXG": "https://gamblineers.com/pax-gold-casinos/",
+    "Pepe": "https://gamblineers.com/pepe-casinos/",
+    "Samoyedcoin": "https://gamblineers.com/samoyedcoin-casinos/", "SAMO": "https://gamblineers.com/samoyedcoin-casinos/",
+    "Stablecoin": "https://gamblineers.com/stablecoin-casinos/",
+    "Sui": "https://gamblineers.com/sui-casinos/",
+    "Synthetix": "https://gamblineers.com/synthetix-casinos/", "SNX": "https://gamblineers.com/synthetix-casinos/",
+    "Tezos": "https://gamblineers.com/tezos-casinos/", "XTZ": "https://gamblineers.com/tezos-casinos/",
+    "The Graph": "https://gamblineers.com/the-graph-casinos/", "GRT": "https://gamblineers.com/the-graph-casinos/",
+    "Theta Network": "https://gamblineers.com/theta-network-casinos/", "THETA": "https://gamblineers.com/theta-network-casinos/",
+    "THORChain": "https://gamblineers.com/thorchain-casinos/", "RUNE": "https://gamblineers.com/thorchain-casinos/",
+    "Toncoin": "https://gamblineers.com/toncoin-casinos/", "TON": "https://gamblineers.com/toncoin-casinos/",
+    "Zcash": "https://gamblineers.com/zcash-casinos/", "ZEC": "https://gamblineers.com/zcash-casinos/",
+    "Aave": "https://gamblineers.com/aave-casinos/",
+    "Algorand": "https://gamblineers.com/algorand-casinos/", "ALGO": "https://gamblineers.com/algorand-casinos/",
+    "Amp": "https://gamblineers.com/amp-casinos/",
+    "Axie Infinity": "https://gamblineers.com/axie-infinity-casinos/", "AXS": "https://gamblineers.com/axie-infinity-casinos/",
+    "Basic Attention Token": "https://gamblineers.com/basic-attention-token-casinos/", "BAT": "https://gamblineers.com/basic-attention-token-casinos/",
+    "Avalanche": "https://gamblineers.com/avalanche-casinos/", "AVAX": "https://gamblineers.com/avalanche-casinos/",
+    "Cosmos": "https://gamblineers.com/cosmos-casinos/", "ATOM": "https://gamblineers.com/cosmos-casinos/",
+    "Cronos": "https://gamblineers.com/cronos-casinos/", "CRO": "https://gamblineers.com/cronos-casinos/",
+    "Curve DAO": "https://gamblineers.com/curve-dao-casinos/", "CRV": "https://gamblineers.com/curve-dao-casinos/",
+    "EOS": "https://gamblineers.com/eos-casinos/",
+    "Floki": "https://gamblineers.com/floki-casinos/",
+    "Hedera": "https://gamblineers.com/hedera-casinos/", "HBAR": "https://gamblineers.com/hedera-casinos/",
+    "Loopring": "https://gamblineers.com/loopring-casinos/", "LRC": "https://gamblineers.com/loopring-casinos/",
+    "Qtum": "https://gamblineers.com/qtum-casinos/",
+    "Stellar": "https://gamblineers.com/stellar-casinos/", "XLM": "https://gamblineers.com/stellar-casinos/",
+    "1inch": "https://gamblineers.com/1inch-network-casinos/", "1inch Network": "https://gamblineers.com/1inch-network-casinos/",
+    "Aptos": "https://gamblineers.com/aptos-casinos/", "APT": "https://gamblineers.com/aptos-casinos/",
+}
+
+def link_crypto_mentions(review_text):
+    """Auto-link mentions of specific cryptocurrencies (e.g. in a Payments section's
+    accepted-coins list) to their Gamblineers coin page. Case-sensitive: several coin
+    names/tickers double as common English words (Compound, Maker, Optimism, Sandbox,
+    Dash, Gala, Amp, Kava), and requiring proper-noun capitalization avoids linking
+    generic lowercase usage of those words.
+    """
+    # Longest name first (e.g. "Ethereum Classic" before "Ethereum") so a shorter name
+    # can't grab part of a longer, more specific one.
+    pairs = [
+        (re.compile(r'\b' + re.escape(name) + r'\b'), url)
+        for name, url in sorted(CRYPTO_PAGE_MAP.items(), key=lambda kv: -len(kv[0]))
+    ]
+    linked_text = _link_patterns(review_text, pairs)
+    print("Cryptocurrency mention linking completed")
+    return linked_text
+
+# Topical/resource pages worth linking on sight - concept phrase -> Gamblineers guide page.
+# Deliberately excludes generic gambling-activity nouns (slots, dice, roulette, free spins,
+# VIP, etc.) that almost always describe the REVIEWED casino's own feature rather than a
+# generic reference, since auto-linking those tends to look wrong/spammy in context.
+TOPICAL_PAGE_MAP = {
+    "anonymous crypto casino": "https://gamblineers.com/anonymous-bitcoin-casinos/",
+    "anonymous cryptocurrency casino": "https://gamblineers.com/anonymous-bitcoin-casinos/",
+    "anonymous bitcoin casino": "https://gamblineers.com/anonymous-bitcoin-casinos/",
+    "anonymous casino": "https://gamblineers.com/anonymous-bitcoin-casinos/",
+    "minimum deposit": "https://gamblineers.com/minimum-deposit-bitcoin-casino/",
+    "fast withdrawals": "https://gamblineers.com/fast-withdrawal-casinos/",
+    "fast withdrawal": "https://gamblineers.com/fast-withdrawal-casinos/",
+    "provably fair games": "https://gamblineers.com/provably-fair-games/",
+    "provably fair": "https://gamblineers.com/provably-fair-games/",
+    "responsible gambling tools": "https://gamblineers.com/responsible-gambling/",
+    "responsible gambling": "https://gamblineers.com/responsible-gambling/",
+    "wager-free bitcoin casino bonuses": "https://gamblineers.com/wager-free-bitcoin-casino-bonuses/",
+    "wager-free": "https://gamblineers.com/wager-free-bitcoin-casino-bonuses/",
+    "wager free": "https://gamblineers.com/wager-free-bitcoin-casino-bonuses/",
+    "zero wagering": "https://gamblineers.com/wager-free-bitcoin-casino-bonuses/",
+    "no wagering": "https://gamblineers.com/wager-free-bitcoin-casino-bonuses/",
+    "faucet promotions": "https://gamblineers.com/bitcoin-casino-faucet/",
+    "faucet": "https://gamblineers.com/bitcoin-casino-faucet/",
+    "cashback": "https://gamblineers.com/bitcoin-casino-cashback/",
+    "high rollers": "https://gamblineers.com/high-roller-casinos/",
+    "high roller": "https://gamblineers.com/high-roller-casinos/",
+    "bitcoin casino bonuses": "https://gamblineers.com/bitcoin-bonus-guide/",
+    "crypto casino bonuses": "https://gamblineers.com/bitcoin-bonus-guide/",
+}
+
+def link_topical_page_mentions(review_text):
+    """Auto-link recognized concept phrases (provably fair, responsible gambling, etc.)
+    to their Gamblineers guide page. Case-insensitive since these are ordinary phrases,
+    not proper nouns.
+    """
+    # Longest phrase first (e.g. "responsible gambling tools" before "responsible
+    # gambling") so the fuller, more specific anchor text wins where it's present.
+    pairs = [
+        (re.compile(r'\b' + re.escape(phrase) + r'\b', re.IGNORECASE), url)
+        for phrase, url in sorted(TOPICAL_PAGE_MAP.items(), key=lambda kv: -len(kv[0]))
+    ]
+    linked_text = _link_patterns(review_text, pairs)
+    print("Topical page linking completed")
     return linked_text
 
 def fix_bullet_points(review_content):
@@ -1260,12 +1438,14 @@ def main():
                         # Fix bullet points before uploading
                         final_review = fix_bullet_points(final_review)
 
-                        # Add internal links to casino names (fetches the live sitemap)
-                        st.info("🔗 Adding internal links to comparison casinos...")
+                        # Add internal links: casinos (live sitemap), cryptocurrencies, and topical pages
+                        st.info("🔗 Adding internal links...")
                         final_review = link_casino_mentions(
                             final_review,
                             st.session_state.casino_name
                         )
+                        final_review = link_crypto_mentions(final_review)
+                        final_review = link_topical_page_mentions(final_review)
 
                         # Post to Google Docs
                         st.info("📤 Uploading to Google Drive...")
@@ -1319,12 +1499,14 @@ def main():
                     # Fix bullet points before uploading
                     final_review = fix_bullet_points(final_review)
 
-                    # Add internal links to casino names (fetches the live sitemap)
-                    st.info("🔗 Adding internal links to comparison casinos...")
+                    # Add internal links: casinos (live sitemap), cryptocurrencies, and topical pages
+                    st.info("🔗 Adding internal links...")
                     final_review = link_casino_mentions(
                         final_review,
                         st.session_state.casino_name
                     )
+                    final_review = link_crypto_mentions(final_review)
+                    final_review = link_topical_page_mentions(final_review)
 
                     doc_id = create_google_doc_in_folder(docs_service, drive_service, FOLDER_ID, doc_title, final_review)
                     doc_url = f"https://docs.google.com/document/d/{doc_id}"
