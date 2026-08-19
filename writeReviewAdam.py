@@ -592,9 +592,15 @@ def get_gamblineers_casino_review_map():
 def _link_patterns(text, pattern_url_pairs):
     """Shared matcher: wrap each safe match of a compiled regex with a markdown link to
     its URL, preserving the exact text matched (casing/punctuation untouched). Skips any
-    match that overlaps text already bold or already a link, to avoid nested/broken
-    markdown, and recomputes those protected ranges fresh after each pattern is applied
-    since earlier patterns may have inserted new links.
+    match that overlaps an existing link entirely (no nested links), and recomputes those
+    protected ranges fresh after each pattern is applied since earlier patterns may have
+    inserted new links.
+
+    A match that falls entirely inside an existing **bold** span's inner text is allowed -
+    only the four "**" delimiter characters themselves are protected, not the text between
+    them - so it comes out nested as **[text](url)** instead of being skipped. Adam's
+    rewrite bolds competitor casino names it names in a comparison often enough that
+    skipping those matches meant most comparisons never got linked at all.
 
     Args:
         text: source text
@@ -608,7 +614,10 @@ def _link_patterns(text, pattern_url_pairs):
     for pattern, url in pattern_url_pairs:
         protected = [False] * len(linked_text)
         for span in re.finditer(r'\*\*.*?\*\*', linked_text):
-            for i in range(*span.span()):
+            s, e = span.span()
+            for i in range(s, s + 2):
+                protected[i] = True
+            for i in range(e - 2, e):
                 protected[i] = True
         for span in re.finditer(r'\[[^\]]*\]\(https?://[^\)]+\)', linked_text):
             for i in range(*span.span()):
@@ -1243,15 +1252,20 @@ def _reconstruct_markdown_from_formatting(plain_text, formatting_requests):
         text_style = style["textStyle"]
         start = style["range"]["startIndex"]
         end = style["range"]["endIndex"]
+        # Opens accumulate outer-to-inner (append) since outer spans are always added to
+        # formatting_requests before anything nested inside them (e.g. a bold span before
+        # its nested link). Closes need the opposite order at a shared index - the inner
+        # span must close before the outer one - so insert(0, ...) reverses it: whichever
+        # was added last (more deeply nested) closes first.
         if text_style.get("link"):
             opens.setdefault(start, []).append("[")
-            closes.setdefault(end, []).append(f"]({text_style['link']['url']})")
+            closes.setdefault(end, []).insert(0, f"]({text_style['link']['url']})")
         elif text_style.get("bold"):
             opens.setdefault(start, []).append("**")
-            closes.setdefault(end, []).append("**")
+            closes.setdefault(end, []).insert(0, "**")
         elif text_style.get("italic"):
             opens.setdefault(start, []).append("*")
-            closes.setdefault(end, []).append("*")
+            closes.setdefault(end, []).insert(0, "*")
 
     pieces = []
     for i, ch in enumerate(plain_text):
@@ -1263,6 +1277,42 @@ def _reconstruct_markdown_from_formatting(plain_text, formatting_requests):
     pieces.extend(closes.get(end_idx, []))
     pieces.extend(opens.get(end_idx, []))
     return "".join(pieces)
+
+
+_NESTED_LINK_PATTERN = re.compile(r'\[([^\]]+?)\]\((https?://[^\)]+)\)')
+
+
+def _extract_nested_links(bold_text, base_cursor):
+    """A **bold** span's inner text can itself contain a [text](url) link that
+    _link_patterns() nested inside it (see that function's docstring) - the outer bold
+    regex captures that raw markup as part of bold_text instead of parsing it. Strip the
+    link markup down to its visible text and return matching link formatting requests,
+    with doc-index ranges computed relative to base_cursor (where this bold span starts
+    in the final plain text), so the caller can apply bold to the whole span and link to
+    just the nested part.
+    """
+    clean_text = ""
+    requests = []
+    last_end = 0
+    cursor = base_cursor
+    for m in _NESTED_LINK_PATTERN.finditer(bold_text):
+        start, end = m.span()
+        before = bold_text[last_end:start]
+        clean_text += before
+        cursor += len(before)
+        link_text, url = m.group(1), m.group(2)
+        requests.append({
+            "updateTextStyle": {
+                "range": {"startIndex": cursor, "endIndex": cursor + len(link_text)},
+                "textStyle": {"link": {"url": url}},
+                "fields": "link"
+            }
+        })
+        clean_text += link_text
+        cursor += len(link_text)
+        last_end = end
+    clean_text += bold_text[last_end:]
+    return clean_text, requests
 
 
 def _first_diff_context(reconstructed, original, radius=40):
@@ -1337,7 +1387,8 @@ def insert_parsed_text_with_formatting(docs_service, doc_id, review_text):
         cursor_start = cursor + len(before_text)
 
         if match.group('bold') is not None:
-            styled_text = match.group('bold_text')
+            raw_bold_text = match.group('bold_text')
+            styled_text, nested_link_requests = _extract_nested_links(raw_bold_text, cursor_start)
             plain_text += styled_text
             formatting_requests.append({
                 "updateTextStyle": {
@@ -1346,6 +1397,7 @@ def insert_parsed_text_with_formatting(docs_service, doc_id, review_text):
                     "fields": "bold"
                 }
             })
+            formatting_requests.extend(nested_link_requests)
             cursor += len(before_text) + len(styled_text)
 
         elif match.group('link') is not None:
