@@ -359,15 +359,32 @@ def parse_review_sections(content):
     
     return sections
 
-def rewrite_section(section_title, section_content):
-    """Rewrite a single section using the fine-tuned model."""
+def rewrite_section(section_title, section_content, presentation_directive=None):
+    """Rewrite a single section using the fine-tuned model.
+
+    presentation_directive is this run's structural/opening-style directive for this
+    section (see generate_presentation_plan()) - without it, this fine-tuned rewrite
+    pass has no signal to vary from its own learned default phrasing/structure, and can
+    flatten variety the earlier drafting step already introduced.
+    """
     try:
         print(f"Rewriting section: {section_title}")
+
+        user_content = section_content
+        if presentation_directive and presentation_directive.strip():
+            user_content = f"""Structural/stylistic direction for THIS rewrite (internal instruction - never reference, quote, or let this note appear in the output): {presentation_directive.strip()}
+
+Follow this direction for how you open the section, which sub-topic leads, pacing, and comparison-opener variety. Do not fall back to your usual default opening or structure for a "{section_title}" section if it conflicts with this direction - the point is that this section should not read like every other {section_title} section you've written.
+
+Now rewrite the following in your voice, keeping every fact exactly as given:
+
+{section_content}"""
+
         response = client.chat.completions.create(
             model=FINE_TUNED_MODEL,
             messages=[
                 {"role": "system", "content": "You are Adam Gros, founder and editor-in-chief of Gamblineers, a seasoned crypto casino expert with over 10 years of experience. Your background is in mathematics and data analysis. You are a helpful assistant that rewrites content provided by the user - ONLY THROUGH YOUR TONE AND STYLE, YOU DO NOT CHANGE FACTS or ADD NEW FACTS. YOU REWRITE GIVEN FACTS IN YOUR OWN STYLE.\n\nYou write from a first-person singular perspective and speak directly to \"you,\" the reader.\n\nYour voice is analytical, witty, blunt, and honest-with a sharp eye for BS and a deep respect for data. You balance professionalism with dry humor. You call things as they are, whether good or bad, and never sugarcoat reviews.\n\nWriting & Style Rules\n- Always write in first-person singular (\"I\")\n- Speak directly to you, the reader\n- Keep sentences under 20 words\n- Never use em dashes or emojis\n- Never use fluff words like: \"fresh,\" \"solid,\" \"straightforward,\" \"smooth,\" \"game-changer\"\n- Avoid clichés: \"kept me on the edge of my seat,\" \"whether you're this or that,\" etc.\n- Bold key facts, bonuses, or red flags\n- Use short paragraphs (2–3 sentences max)\n- Use bullet points for clarity (pros/cons, bonuses, steps, etc.)\n- Tables are optional for comparisons\n- Be helpful without sounding preachy or salesy\n- If something sucks, say it. If it's good, explain why.\n\nTone\n- Casual but sharp\n- Witty, occasionally sarcastic (in good taste)\n- Confident, never condescending\n- Conversational, never robotic\n- Always honest-even when it hurts\n\nMission & Priorities\n- Save readers from scammy casinos and shady bonus terms\n- Transparency beats hype-user satisfaction > feature lists\n- Crypto usability matters\n- The site serves readers, not casinos\n- Highlight what others overlook-good or bad\n\nPersonality Snapshot\n- INTJ: Strategic, opinionated, allergic to buzzwords\n- Meticulous and detail-obsessed\n- Enjoys awkward silences and bad data being called out\n- Prefers dry humor and meaningful critiques."},
-                {"role": "user", "content": section_content}
+                {"role": "user", "content": user_content}
             ],
             timeout=30  # Reduced timeout to 30 seconds
         )
@@ -484,20 +501,26 @@ Do not repeat information that will be covered in detail in other sections - thi
         print(error_msg)
         return f"**Overview**\n[Error generating Overview section: {error}]"
 
-def rewrite_review_with_adam(review_content):
-    """Rewrite the entire review using Adam's voice, section by section."""
+def rewrite_review_with_adam(review_content, presentation_plan=None):
+    """Rewrite the entire review using Adam's voice, section by section.
+
+    presentation_plan is this run's per-section structural/opening-style directive
+    (see generate_presentation_plan()) - threaded through to rewrite_section() so the
+    fine-tuned rewrite pass keeps the variety the earlier drafting step already
+    introduced instead of flattening it back to its own default phrasing.
+    """
     try:
         print("Starting Adam's rewrite process...")
         sections = parse_review_sections(review_content)
-        
+
         if not sections:
             print("No sections detected, rewriting as whole")
             # If no sections detected, rewrite as whole
             return rewrite_section("Full Review", review_content)
-        
+
         print(f"Found {len(sections)} sections to rewrite")
         rewritten_sections = []
-        
+
         for i, section in enumerate(sections, 1):
             print(f"Processing section {i}/{len(sections)}: {section['title']}")
 
@@ -509,7 +532,8 @@ def rewrite_review_with_adam(review_content):
                 rewritten_sections.append(f"**{section['title']}**\n{section['content']}")
                 continue
 
-            rewritten_content = rewrite_section(section['title'], section['content'])
+            directive = (presentation_plan or {}).get(section['title'], "")
+            rewritten_content = rewrite_section(section['title'], section['content'], directive)
 
             # If there was an error, still include it to avoid breaking the flow
             if rewritten_content.startswith("[Error rewriting"):
@@ -826,21 +850,35 @@ def fix_bullet_points(review_content):
     try:
         import re
 
+        # 0. Strip stray backslashes Adam's rewrite sometimes drops next to a plain
+        # word (e.g. "\Bitstarz\" instead of "Bitstarz") - never a valid markdown
+        # escape, just noise that would otherwise show up as literal backslashes in
+        # the doc. Escapes handled by rules 1-5 below (\*, \#, \+, \-) are followed by
+        # punctuation, not a letter/digit, so this never touches them.
+        fixed_content = re.sub(r'\\(?=[A-Za-z0-9])', '', review_content)
+        fixed_content = re.sub(r'(?<=[A-Za-z0-9])\\(?=\s|$)', '', fixed_content, flags=re.MULTILINE)
+
         # 1. Replace \* at the beginning of lines with dash bullets for Google Docs
-        fixed_content = re.sub(r'^\\\\\* ', r'- ', review_content, flags=re.MULTILINE)
+        fixed_content = re.sub(r'^\\+\* ', r'- ', fixed_content, flags=re.MULTILINE)
+
+        # 1b. Same for a plain, unescaped "* " bullet marker - Adam's rewrite doesn't
+        # always escape it. A bullet marker is "*" immediately followed by a space;
+        # an italic-opening "*word" (no space after the asterisk) is left alone here
+        # so this can't eat real emphasis.
+        fixed_content = re.sub(r'^\* ', r'- ', fixed_content, flags=re.MULTILINE)
 
         # 2. Convert escaped hash headers (\#\#\#) to bold format - preserve existing ** if present
-        fixed_content = re.sub(r'^\\\\\#\\\\\#\\\\\# \*\*(.+?)\*\*$', r'**\1**', fixed_content, flags=re.MULTILINE)
-        fixed_content = re.sub(r'^\\\\\#\\\\\#\\\\\# (.+)$', r'**\1**', fixed_content, flags=re.MULTILINE)
+        fixed_content = re.sub(r'^\\+\#\\+\#\\+\# \*\*(.+?)\*\*$', r'**\1**', fixed_content, flags=re.MULTILINE)
+        fixed_content = re.sub(r'^\\+\#\\+\#\\+\# (.+)$', r'**\1**', fixed_content, flags=re.MULTILINE)
 
-        # 3. Convert markdown headings (## Heading) to bold format
-        fixed_content = re.sub(r'^## (.+)$', r'**\1**', fixed_content, flags=re.MULTILINE)
+        # 3. Convert markdown headings (## Heading, ### Heading, ...) to bold format
+        fixed_content = re.sub(r'^#{2,6} (.+)$', r'**\1**', fixed_content, flags=re.MULTILINE)
 
         # 4. Fix escaped plus signs in bonus descriptions (\+ -> +)
-        fixed_content = re.sub(r'\\\\\+', r'+', fixed_content)
+        fixed_content = re.sub(r'\\+\+', r'+', fixed_content)
 
         # 5. Ensure \- bullets (which are already correct) stay as - bullets
-        fixed_content = re.sub(r'^\\\\\- ', r'- ', fixed_content, flags=re.MULTILINE)
+        fixed_content = re.sub(r'^\\+\- ', r'- ', fixed_content, flags=re.MULTILINE)
 
         print("All formatting issues fixed successfully")
         return fixed_content
@@ -1187,6 +1225,86 @@ def write_review_link_to_sheet(link):
         body=body
     ).execute()
 
+def _reconstruct_markdown_from_formatting(plain_text, formatting_requests):
+    """Rebuild **bold**/[text](url)/*italic* markdown from plain_text plus the computed
+    Google Docs style ranges, so it can be diffed against the source text as a sanity
+    check before anything is sent to the Docs API - if replaying the ranges doesn't
+    reproduce the original markdown exactly, the ranges are wrong and would land the
+    styling on the wrong characters (the mid-word bold/link corruption this guards
+    against).
+    """
+    opens, closes = {}, {}
+    for req in formatting_requests:
+        style = req.get("updateTextStyle")
+        if not style:
+            continue
+        text_style = style["textStyle"]
+        start = style["range"]["startIndex"]
+        end = style["range"]["endIndex"]
+        if text_style.get("link"):
+            opens.setdefault(start, []).append("[")
+            closes.setdefault(end, []).append(f"]({text_style['link']['url']})")
+        elif text_style.get("bold"):
+            opens.setdefault(start, []).append("**")
+            closes.setdefault(end, []).append("**")
+        elif text_style.get("italic"):
+            opens.setdefault(start, []).append("*")
+            closes.setdefault(end, []).append("*")
+
+    pieces = []
+    for i, ch in enumerate(plain_text):
+        idx = 1 + i
+        pieces.extend(closes.get(idx, []))
+        pieces.extend(opens.get(idx, []))
+        pieces.append(ch)
+    end_idx = 1 + len(plain_text)
+    pieces.extend(closes.get(end_idx, []))
+    pieces.extend(opens.get(end_idx, []))
+    return "".join(pieces)
+
+
+def _first_diff_context(reconstructed, original, radius=40):
+    """Human-readable pointer to where two strings first diverge, for error messages."""
+    for i in range(min(len(reconstructed), len(original))):
+        if reconstructed[i] != original[i]:
+            return (
+                f"reconstructed={reconstructed[max(0, i - radius):i + radius]!r} "
+                f"vs original={original[max(0, i - radius):i + radius]!r}"
+            )
+    if len(reconstructed) != len(original):
+        return f"lengths differ ({len(reconstructed)} vs {len(original)}); one is a prefix of the other"
+    return "(strings are identical - unexpected)"
+
+
+def _find_mid_word_boundaries(plain_text, formatting_requests):
+    """Flag any bold/link/italic span whose start or end lands inside a word (a
+    letter/digit on both sides of the boundary). The round-trip check above only
+    proves this function's own math is internally consistent - it would happily pass
+    on malformed markdown that was already broken before it got here (e.g. a link
+    wrapping the wrong few characters upstream). This catches that case directly by
+    checking the one thing that's never legitimate: styling that splits a word.
+    """
+    def is_word_char(ch):
+        return ch is not None and ch.isalnum()
+
+    problems = []
+    for req in formatting_requests:
+        style = req.get("updateTextStyle")
+        if not style:
+            continue
+        start = style["range"]["startIndex"]
+        end = style["range"]["endIndex"]
+        before = plain_text[start - 2] if start - 2 >= 0 else None
+        at_start = plain_text[start - 1] if 0 <= start - 1 < len(plain_text) else None
+        at_last = plain_text[end - 2] if 0 <= end - 2 < len(plain_text) else None
+        after = plain_text[end - 1] if 0 <= end - 1 < len(plain_text) else None
+        if is_word_char(before) and is_word_char(at_start):
+            problems.append(f"starts mid-word: ...{plain_text[max(0, start - 20):start + 20]!r}...")
+        if is_word_char(at_last) and is_word_char(after):
+            problems.append(f"ends mid-word: ...{plain_text[max(0, end - 20):end + 20]!r}...")
+    return problems
+
+
 def insert_parsed_text_with_formatting(docs_service, doc_id, review_text):
     # Bullet lines carry a leading "- " (see fix_bullet_points()). Record which lines are
     # bullets before stripping any markup, then strip that marker here - it gets replaced
@@ -1203,7 +1321,11 @@ def insert_parsed_text_with_formatting(docs_service, doc_id, review_text):
     formatting_requests = []
     cursor = 1  # Google Docs uses 1-based index after the title
 
-    pattern = r'(\*\*(.*?)\*\*|\[([^\]]+?)\]\((https?://[^\)]+)\))'
+    pattern = (
+        r'(?P<bold>\*\*(?P<bold_text>.*?)\*\*)'
+        r'|(?P<link>\[(?P<link_text>[^\]]+?)\]\((?P<url>https?://[^\)]+)\))'
+        r'|(?P<italic>\*(?P<italic_text>[^\*\n]+?)\*)'
+    )
     last_end = 0
 
     for match in re.finditer(pattern, review_text):
@@ -1212,35 +1334,69 @@ def insert_parsed_text_with_formatting(docs_service, doc_id, review_text):
         plain_text += before_text
         cursor_start = cursor + len(before_text)
 
-        if match.group(2):  # Bold (**text**)
-            bold_text = match.group(2)
-            plain_text += bold_text
+        if match.group('bold') is not None:
+            styled_text = match.group('bold_text')
+            plain_text += styled_text
             formatting_requests.append({
                 "updateTextStyle": {
-                    "range": {"startIndex": cursor_start, "endIndex": cursor_start + len(bold_text)},
+                    "range": {"startIndex": cursor_start, "endIndex": cursor_start + len(styled_text)},
                     "textStyle": {"bold": True},
                     "fields": "bold"
                 }
             })
-            cursor += len(before_text) + len(bold_text)
+            cursor += len(before_text) + len(styled_text)
 
-        elif match.group(3) and match.group(4):  # Link [text](url)
-            link_text = match.group(3)
-            url = match.group(4)
-            plain_text += link_text
+        elif match.group('link') is not None:
+            styled_text = match.group('link_text')
+            url = match.group('url')
+            plain_text += styled_text
             formatting_requests.append({
                 "updateTextStyle": {
-                    "range": {"startIndex": cursor_start, "endIndex": cursor_start + len(link_text)},
+                    "range": {"startIndex": cursor_start, "endIndex": cursor_start + len(styled_text)},
                     "textStyle": {"link": {"url": url}},
                     "fields": "link"
                 }
             })
-            cursor += len(before_text) + len(link_text)
+            cursor += len(before_text) + len(styled_text)
+
+        else:  # Italic (*text*)
+            styled_text = match.group('italic_text')
+            plain_text += styled_text
+            formatting_requests.append({
+                "updateTextStyle": {
+                    "range": {"startIndex": cursor_start, "endIndex": cursor_start + len(styled_text)},
+                    "textStyle": {"italic": True},
+                    "fields": "italic"
+                }
+            })
+            cursor += len(before_text) + len(styled_text)
 
         last_end = end
 
     remaining_text = review_text[last_end:]
     plain_text += remaining_text
+
+    # Sanity check: replaying the computed ranges against plain_text must reproduce
+    # review_text exactly. If it doesn't, the ranges are wrong and would silently apply
+    # bold/link/italic styling to the wrong characters once uploaded (mid-word splits).
+    # Fail loudly here instead of publishing a corrupted doc.
+    reconstructed = _reconstruct_markdown_from_formatting(plain_text, formatting_requests)
+    if reconstructed != review_text:
+        raise ValueError(
+            "Formatting sanity check failed before uploading to Google Docs: replaying "
+            "the computed bold/link/italic ranges does not reproduce the source markdown. "
+            f"First divergence: {_first_diff_context(reconstructed, review_text)}"
+        )
+
+    # Second, independent check: no span may split a word, even if the round-trip above
+    # passed (which only proves this function didn't corrupt already-malformed input).
+    mid_word_problems = _find_mid_word_boundaries(plain_text, formatting_requests)
+    if mid_word_problems:
+        raise ValueError(
+            "Formatting sanity check failed before uploading to Google Docs: "
+            f"{len(mid_word_problems)} bold/link/italic span(s) split a word. "
+            + " | ".join(mid_word_problems[:5])
+        )
 
     #  Insert clean plain text first
     docs_service.documents().batchUpdate(
@@ -1633,7 +1789,7 @@ def main():
 
             initial_review = "\n".join(out)
 
-            rewritten_review = rewrite_review_with_adam(initial_review)
+            rewritten_review = rewrite_review_with_adam(initial_review, presentation_plan)
 
             # Step 3: Store rewritten review, then prompt for Overview input
             st.session_state.rewritten_review = rewritten_review
