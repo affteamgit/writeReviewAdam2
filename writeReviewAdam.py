@@ -1452,6 +1452,19 @@ def insert_parsed_text_with_formatting(docs_service, doc_id, review_text):
             + " | ".join(mid_word_problems[:5])
         )
 
+    # Degenerate markdown like "****" (an empty bold pair with nothing between the
+    # opening and closing **) produces a zero-length updateTextStyle range - it round-
+    # trips fine above since there's no text to misplace, but the Docs API rejects an
+    # empty range outright ("The range should not be empty."). Drop those requests here,
+    # after validation: there's no visible content to style, so nothing is lost.
+    formatting_requests = [
+        req for req in formatting_requests
+        if not (
+            "updateTextStyle" in req
+            and req["updateTextStyle"]["range"]["startIndex"] == req["updateTextStyle"]["range"]["endIndex"]
+        )
+    ]
+
     #  Insert clean plain text first
     docs_service.documents().batchUpdate(
         documentId=doc_id,
