@@ -359,24 +359,24 @@ def parse_review_sections(content):
     
     return sections
 
-def rewrite_section(section_title, section_content, presentation_directive=None):
+def rewrite_section(section_title, section_content):
     """Rewrite a single section using the fine-tuned model.
 
-    presentation_directive is this run's structural/opening-style directive for this
-    section (see generate_presentation_plan()) - without it, this fine-tuned rewrite
-    pass has no signal to vary from its own learned default phrasing/structure, and can
-    flatten variety the earlier drafting step already introduced.
+    Deliberately does NOT receive the run's Presentation Plan directive (see
+    generate_presentation_plan()). This is a small, older fine-tuned model that isn't
+    reliable at holding an "internal instruction - never reference this" boundary: fed
+    that free-form structural directive, it has been observed to fuse fragments of the
+    instruction into the visible output as garbled, nonsensical prose rather than either
+    following or ignoring it cleanly (e.g. a stray broken sentence in a review's Games
+    section that read like leaked meta-commentary instead of review content). The
+    earlier Claude drafting pass already applies the Presentation Plan's structure and
+    ordering to section_content, so this model only needs to preserve what it's handed,
+    not reinterpret an abstract directive of its own.
     """
     try:
         print(f"Rewriting section: {section_title}")
 
-        user_content = section_content
-        if presentation_directive and presentation_directive.strip():
-            user_content = f"""Structural/stylistic direction for THIS rewrite (internal instruction - never reference, quote, or let this note appear in the output): {presentation_directive.strip()}
-
-Follow this direction for how you open the section, which sub-topic leads, pacing, and comparison-opener variety. Do not fall back to your usual default opening or structure for a "{section_title}" section if it conflicts with this direction - the point is that this section should not read like every other {section_title} section you've written.
-
-Now rewrite the following in your voice, keeping every fact exactly as given:
+        user_content = f"""Rewrite the following in your voice, keeping every fact exactly as given. Keep the same paragraph order, the same lead topic, and the same opening-sentence structure and approach as the input below - do not revert to your own habitual opening or reorder the content. Change only wording and tone.
 
 {section_content}"""
 
@@ -503,13 +503,11 @@ Do not repeat information that will be covered in detail in other sections - thi
         print(error_msg)
         return f"**Overview**\n[Error generating Overview section: {error}]"
 
-def rewrite_review_with_adam(review_content, presentation_plan=None):
+def rewrite_review_with_adam(review_content):
     """Rewrite the entire review using Adam's voice, section by section.
 
-    presentation_plan is this run's per-section structural/opening-style directive
-    (see generate_presentation_plan()) - threaded through to rewrite_section() so the
-    fine-tuned rewrite pass keeps the variety the earlier drafting step already
-    introduced instead of flattening it back to its own default phrasing.
+    Does not receive the run's Presentation Plan - see rewrite_section() for why it's
+    deliberately kept away from this fine-tuned pass.
     """
     try:
         print("Starting Adam's rewrite process...")
@@ -534,8 +532,7 @@ def rewrite_review_with_adam(review_content, presentation_plan=None):
                 rewritten_sections.append(f"**{section['title']}**\n{section['content']}")
                 continue
 
-            directive = (presentation_plan or {}).get(section['title'], "")
-            rewritten_content = rewrite_section(section['title'], section['content'], directive)
+            rewritten_content = rewrite_section(section['title'], section['content'])
 
             # If there was an error, still include it to avoid breaking the flow
             if rewritten_content.startswith("[Error rewriting"):
@@ -553,6 +550,64 @@ def rewrite_review_with_adam(review_content, presentation_plan=None):
         print(error_msg)
         # Return original content if everything fails
         return f"[Rewrite failed - using original content]\n\n{review_content}"
+
+
+def qc_review_pass(review_content: str) -> str:
+    """Find and repair any garbled or leaked-instruction sentence left by the
+    fine-tuned voice rewrite pass (rewrite_section()), using a strong model that's
+    reliable at the "internal instruction, never reference this" boundary the small
+    fine-tune isn't.
+
+    Runs once over the whole assembled, rewritten review rather than per-section, so it
+    can also catch anything that only looks wrong in context. Fails open on any error or
+    on a suspiciously short response - a QC pass that silently mangles or truncates a
+    clean review is worse than the bug it's meant to catch, so when in doubt it returns
+    the input untouched rather than trusting the edit.
+    """
+    try:
+        print("Running QC pass over rewritten review...")
+
+        qc_prompt = f"""Below is a casino review produced by an automated tone-rewrite pass. That pass occasionally lets a broken sentence slip through: gibberish, ungrammatical or nonsensical prose, or a sentence that reads like a leaked internal writing instruction (mentioning things like "internal instruction," "presentation direction," "structural direction," "nonce," or otherwise describing how to write the review instead of just being the review) rather than genuine first-person review content a reader should see.
+
+Find every sentence like that, if any. For each one, either delete it (if the surrounding text reads fine without it) or replace it with a short, coherent sentence that fits naturally in the same spot and matches the surrounding voice - never inventing a new fact, number, or claim that isn't already stated elsewhere in this review.
+
+Do not touch anything else. Every sentence that already reads as coherent, on-topic, first-person review prose must come back byte-for-byte identical, including all markdown formatting, bold text, links, and section headers.
+
+Output ONLY the full corrected review text - no preamble, no list of what you changed, nothing before or after it.
+
+---
+
+{review_content}"""
+
+        response = anthropic.messages.create(
+            model="claude-sonnet-5",
+            max_tokens=4000,
+            thinking={"type": "disabled"},
+            system=(
+                "You are a meticulous copy editor for Gamblineers, a crypto casino "
+                "review site. You only ever remove or repair broken or leaked-"
+                "instruction sentences in a draft you're handed - you never rewrite, "
+                "trim, rephrase, or otherwise improve anything that already reads as "
+                "normal review prose, and you never add a new fact, number, or claim."
+            ),
+            messages=[{"role": "user", "content": qc_prompt}],
+        )
+        cleaned = next(block.text for block in response.content if block.type == "text").strip()
+
+        if not cleaned or len(cleaned) < 0.5 * len(review_content):
+            print("QC pass: response looked truncated or empty, keeping original review")
+            return review_content
+
+        if cleaned != review_content:
+            print(f"QC pass: made changes (original {len(review_content)} chars -> cleaned {len(cleaned)} chars)")
+        else:
+            print("QC pass: no changes needed")
+
+        return cleaned
+    except Exception as e:
+        print(f"QC pass failed, continuing with unedited review: {e}")
+        return review_content
+
 
 MIN_CASINO_SLUG_LENGTH = 3  # skip pathologically short slugs to avoid false-positive matches
 
@@ -1702,7 +1757,12 @@ def main():
 
             initial_review = "\n".join(out)
 
-            rewritten_review = rewrite_review_with_adam(initial_review, presentation_plan)
+            rewritten_review = rewrite_review_with_adam(initial_review)
+
+            # Step 2b: QC pass - catch any garbled/leaked-instruction sentence the
+            # fine-tuned voice rewrite let through before a human ever sees it.
+            progress_placeholder.markdown("## Running QC pass...")
+            rewritten_review = qc_review_pass(rewritten_review)
 
             # Step 3: Store rewritten review, then prompt for Overview input
             st.session_state.rewritten_review = rewritten_review
