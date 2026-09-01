@@ -1,2 +1,6 @@
 .DS_Store
 reviews/
+reviews_agent/
+prompt_*.txt
+__pycache__/
+.venv/
