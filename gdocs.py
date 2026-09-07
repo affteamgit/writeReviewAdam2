@@ -25,6 +25,9 @@ from typing import Dict, List, Optional, Tuple
 
 SECTION_TITLES = ["Overview", "TLDR", "General", "Payments", "Games",
                   "Responsible Gambling", "Bonuses"]
+BONUS_HEADING_FONT_SIZE = 14  # between the 16pt section headers and 11pt body
+
+_H3_PATTERN = re.compile(r"^###\s+(.+)$", re.MULTILINE)
 
 _NESTED_LINK_PATTERN = re.compile(r"\[([^\]]+?)\]\((https?://[^\)]+)\)")
 
@@ -166,13 +169,25 @@ def _extract_nested_links(bold_text: str, base_cursor: int) -> Tuple[str, List[d
 # PARSE + UPLOAD
 # ---------------------------------------------------------------------------
 
+def extract_h3_headers(review_text: str) -> List[str]:
+    """Bonus-name headings ("### Exclusive No Deposit Bonus") as written by the model,
+    captured before normalize_markdown folds every heading level into a plain bold span.
+    Matching this exact stripped text later lets _structure_requests give each one a
+    distinct size without needing a fixed list of bonus names - they're free text.
+    """
+    return [m.strip() for m in _H3_PATTERN.findall(review_text)]
+
+
 def normalize_markdown(review_text: str) -> str:
     """Tidy the few markdown forms that would otherwise upload as literal characters.
 
-    The generator is told to emit only bold, bullets and links, and it complies - but
-    the document title legitimately arrives as "# Casino review", and a stray "##"
-    heading would render as literal hashes rather than a heading. Handled here so the
-    parser downstream only ever sees the markup it knows about.
+    The generator is told to emit only bold, bullets, links and "### Bonus Name"
+    headings inside Bonuses - but the document title legitimately arrives as
+    "# Casino review", and any other stray heading level would render as literal
+    hashes rather than a heading. Handled here so the parser downstream only ever sees
+    the markup it knows about. "###" is folded to a plain bold span like everything
+    else at this stage; the distinct size for a bonus heading is applied afterward by
+    _structure_requests, matching against extract_h3_headers()'s output.
     """
     lines = review_text.split("\n")
     for i, line in enumerate(lines):
@@ -286,15 +301,23 @@ def _line_ranges(plain_text: str) -> List[Tuple[str, int, int]]:
     return out
 
 
-def _structure_requests(plain_text: str, bullet_flags: List[bool]) -> Tuple[List[dict], List[dict]]:
-    """Title style + section-header style, and bullet-run requests.
+def _structure_requests(
+    plain_text: str, bullet_flags: List[bool], h3_headers: Optional[List[str]] = None
+) -> Tuple[List[dict], List[dict]]:
+    """Title style, section-header style, bonus-heading size, and bullet-run requests.
 
     Section headers are located from the plain text rather than by re-fetching the
     uploaded doc and matching paragraph strings, which removes an API round-trip and a
-    dependency on the upload having landed exactly as expected.
+    dependency on the upload having landed exactly as expected. Bonus headings work the
+    same way, matched against extract_h3_headers()'s output rather than a fixed name
+    list, since bonus names are free text ("Exclusive No Deposit Bonus", "Standard
+    First Deposit Bonus", ...). A bonus heading already has a bold span from the normal
+    inline-markdown pass (normalize_markdown folds "###" to "**...**" before parsing),
+    so only a fontSize-only style is added on top here, not a second bold request.
     """
     lines = _line_ranges(plain_text)
     style: List[dict] = []
+    h3_remaining = list(h3_headers or [])
 
     if lines:
         _, start, end = lines[0]
@@ -307,12 +330,22 @@ def _structure_requests(plain_text: str, bullet_flags: List[bool]) -> Tuple[List
         })
 
     for line, start, end in lines[1:]:
-        if line.strip() in SECTION_TITLES and end > start:
+        stripped = line.strip()
+        if stripped in SECTION_TITLES and end > start:
             style.append({
                 "updateTextStyle": {
                     "range": {"startIndex": start, "endIndex": end},
                     "textStyle": {"bold": True, "fontSize": {"magnitude": 16, "unit": "PT"}},
                     "fields": "bold,fontSize",
+                }
+            })
+        elif stripped in h3_remaining and end > start:
+            h3_remaining.remove(stripped)  # each heading text consumed once, in order
+            style.append({
+                "updateTextStyle": {
+                    "range": {"startIndex": start, "endIndex": end},
+                    "textStyle": {"fontSize": {"magnitude": BONUS_HEADING_FONT_SIZE, "unit": "PT"}},
+                    "fields": "fontSize",
                 }
             })
 
@@ -378,8 +411,9 @@ def upload_review(docs, drive, folder_id: str, title: str, review_text: str) -> 
     Parsing and validation happen first, so a formatting problem fails before an empty
     document has been created and left lying in the folder.
     """
+    h3_headers = extract_h3_headers(review_text)
     plain_text, style_requests, bullet_flags = parse_markdown(review_text)
-    para_requests, bullet_requests = _structure_requests(plain_text, bullet_flags)
+    para_requests, bullet_requests = _structure_requests(plain_text, bullet_flags, h3_headers)
 
     doc_id = _execute(docs.documents().create(body={"title": title}), "create doc")["documentId"]
 

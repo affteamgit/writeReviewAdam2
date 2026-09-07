@@ -260,6 +260,9 @@ def build_landscape(db: CasinoDB, focus_name: str) -> str:
 # FOCUS CASINO DOSSIER
 # ----------------------------------------------------------------------------
 
+FIELD_RANK_EXTREME = 5  # top/bottom N of the field that actually earns "one of the most/least"
+
+
 def field_rank(db: CasinoDB, focus: str, label: str, getter) -> Optional[str]:
     """Rank the focus casino against the Live field on one metric, with its neighbours.
 
@@ -270,6 +273,13 @@ def field_rank(db: CasinoDB, focus: str, label: str, getter) -> Optional[str]:
     them in mind. That is the same class of task as the provider set-difference and the
     casino-age arithmetic: cheap and exact in code, error-prone in a model. So compute
     the standing here and hand over the finished sentence.
+
+    The literal ordinal is for fact-checking only, never for the reader: a first draft
+    wrote "ranking 61st of the 78 casinos I track" and "ranking 27th of 78" straight into
+    review prose, which exposes the mechanism and reads like a leaderboard, not a review.
+    Only the two extreme bands earn qualitative "one of the most/least" framing - a
+    middling rank gets no positional language at all, just the neighbour context needed
+    to verify a comparison is correctly ordered.
     """
     scored = []
     for r in db.data_rows:
@@ -291,13 +301,41 @@ def field_rank(db: CasinoDB, focus: str, label: str, getter) -> Optional[str]:
     total = len(scored)
 
     if i == 0:
-        detail = f"HIGHEST in the field. Next highest is {scored[1][1]} at {scored[1][0]}"
+        tier = "HIGHEST in the field - safe to say so in the review, in your own words"
+    elif i < FIELD_RANK_EXTREME:
+        tier = (f"one of the {FIELD_RANK_EXTREME} highest in the field - "
+               f"'one of the highest/most generous I track' is earned here")
     elif i == total - 1:
-        detail = f"LOWEST in the field. Next lowest is {scored[-2][1]} at {scored[-2][0]}"
+        tier = "LOWEST in the field - safe to say so in the review, in your own words"
+    elif i >= total - FIELD_RANK_EXTREME:
+        tier = (f"one of the {FIELD_RANK_EXTREME} lowest in the field - "
+               f"'one of the lowest/most restrictive I track' is earned here")
     else:
-        detail = (f"above it: {scored[i-1][1]} at {scored[i-1][0]}; "
-                  f"below it: {scored[i+1][1]} at {scored[i+1][0]}")
-    return f"- {label}: {own} - rank {i + 1} of {total} ({detail})"
+        tier = ("unremarkable - roughly mid-field. Do NOT frame this as high, low, "
+               "rare or notable in any way. Give your verdict from the criteria table "
+               "only, with no positional language")
+
+    if i == 0:
+        neighbor = f"next highest is {scored[1][1]} at {scored[1][0]}"
+    elif i == total - 1:
+        neighbor = f"next lowest is {scored[-2][1]} at {scored[-2][0]}"
+    else:
+        neighbor = (f"above it: {scored[i-1][1]} at {scored[i-1][0]}; "
+                   f"below it: {scored[i+1][1]} at {scored[i+1][0]}")
+
+    return (f"- {label}: {own} - {tier}. (Internal fact-check only, never state this "
+            f"number or the word 'rank' to the reader: {neighbor}; position {i + 1} "
+            f"of {total}.)")
+
+
+# These 4 fields are long enumerable lists (countries/languages/cryptos/providers).
+# Deliberately withheld from the model in raw form in build_dossier() below - not just
+# told not to enumerate them, because that instruction didn't reliably hold (a review
+# named 13 of BitStarz's 75 blocked countries, another listed 9 cryptocurrencies in
+# full). If the model never sees the list, it cannot recite it. Only the count (DERIVED
+# below) and, for providers, the curated 13-studio present/missing split remain -
+# already the right level of detail for a reader.
+WITHHELD_LIST_COLS = {COL["restricted"], COL["languages"], COL["cryptos"], COL["providers"]}
 
 
 def build_dossier(db: CasinoDB, row: List[str]) -> str:
@@ -309,9 +347,10 @@ def build_dossier(db: CasinoDB, row: List[str]) -> str:
         if not value or i == COL["name"]:
             continue
         label = db.labels.get(i, f"col{i}")
-        if len(value) > 1500:  # provider / country lists
-            items = [p.strip() for p in value.split(",") if p.strip()]
-            out.append(f"- {label} ({len(items)} entries): {value}")
+        if i in WITHHELD_LIST_COLS:
+            n = count_list(value)
+            out.append(f"- {label}: withheld - {n} entries, see DERIVED count below. "
+                      f"Never enumerate this list; state the count and your judgment of it.")
         else:
             out.append(f"- {label}: {value}")
 
@@ -806,6 +845,14 @@ KYC = 0 hours: means NO identity verification at all (not "none up to a threshol
 Restricted countries: >40 is worth a warning so the reader checks eligibility first
 Casino age:   older than 5 years is a positive signal (survived, tightened security, refined UX).
               Under 5 years: say nothing about age.
+Buy crypto on site: a real convenience if you run short mid-session and don't want to
+              leave for an exchange, though it usually carries a markup - worth its own
+              clause either way, not a trailing mention on someone else's sentence.
+              Absent: you have to top up elsewhere before you can keep playing.
+Convert crypto in the casino: uncommon and genuinely useful when present - it means a
+              deposit in one coin doesn't lock you into cashing out in that same coin.
+              Absent (the norm): whatever you fund with is what you're playing and
+              withdrawing, worth a plain one-line note, not a big deal on its own.
 RG tools (besides self-exclusion): 3-4 above average | 1-2 average | 0 needs to step up
               Self-exclusion is the baseline every licensed casino should have.
               Cooling-off is uncommon; credit it when present.
@@ -826,12 +873,18 @@ Plain markdown, nothing before the first header, no commentary about your work.
 # {{casino}} review
 
 **Overview**
-2-3 paragraphs. Must contain the exact phrase "{{keyword}}" verbatim, once, reading
-naturally. This is a hook, not a summary of the sections.
+3 paragraphs, sandwiched pros - cons - pros: open on genuine strength, name the real
+catch in the middle, close back on strength so the review doesn't end up feeling
+front-loaded with the downside. The close isn't a rebuttal of the middle paragraph -
+it's a separate, genuine strength. Must contain the exact phrase "{{keyword}}" verbatim,
+once, reading naturally. This is a hook, not a summary of the sections.
 
 **TLDR**
-- 4 to 5 bullets, one per section's headline finding. Every number copied verbatim
-  from your own body text at the same precision. No bullet may contradict another.
+- 5 to 6 bullets. ONE fact per bullet, not several stitched together with commas and
+  "but" - if you're using a semicolon or a second "and" to fit in another figure, split
+  it into its own bullet or drop it. Pick the most important point per bullet, not
+  every point. Every number copied verbatim from your own body text at the same
+  precision. No bullet may contradict another.
 
 Then these five sections, in this order, each headed exactly like this:
 
@@ -842,11 +895,18 @@ Cover what the data supports and skip what it does not. Bonuses must present bon
 types in this fixed order where they exist: no-deposit, then welcome/first-deposit,
 then sports, then faucet.
 
-Formatting: **bold** for emphasis, "- " for bullets, no markdown links, no headings
-other than the section headers above (no ## or ###).
+Formatting: **bold** for emphasis, "- " for bullets, no markdown links. No heading
+level other than the section headers above (no ##), EXCEPT inside Bonuses: give each
+individual bonus its own "### Bonus Name" heading (e.g. "### Exclusive No Deposit
+Bonus", "### Standard First Deposit Bonus") - ### is reserved for this and used for
+nothing else.
 
-For bonuses, describe the type in prose without figures, then put every specific
-figure in bullets underneath. Comment on at least two rating criteria per bonus."""
+For each bonus: describe the type in prose without figures, then put every specific
+figure in bullets underneath. Do NOT comment on every term of every bonus - that reads
+as a checklist. Comment only where there's something worth saying: a term that's
+genuinely better or worse than the field, or one worth comparing to a competitor.
+An unremarkable bonus can go uncommented, or get one line. Save the real commentary
+for the one or two bonuses (or terms) that actually stand out, good or bad."""
 
 TASK = """\
 Write the review.
@@ -868,6 +928,14 @@ Before you write, think it through:
    number-first, verdict-first, a direct question, a short observation. Do not use the
    same shape twice in one review.
 4. Verify every figure against the dossier before you commit to it.
+5. Never state a literal rank, position, or "Nth of 78" in the review - the dossier's
+   field-standing lines are for your own fact-checking, not for the reader. Only frame
+   something as "one of the highest/lowest I track" when the dossier itself says that
+   tier is earned; a mid-field number gets your plain verdict from the criteria table
+   and no positional language at all.
+6. A feature worth mentioning (buy crypto on site, converting tokens, cooling-off,
+   provably fair, in-house games...) gets its own clause with your judgment on it - not
+   a trailing half-sentence bolted onto a different point.
 
 Two failure modes to avoid, in tension with each other:
 
