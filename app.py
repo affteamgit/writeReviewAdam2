@@ -121,10 +121,22 @@ def main() -> None:
     col1, col2 = st.columns([3, 2])
     with col1:
         casino = st.selectbox("Casino", names, index=None,
-                              placeholder="Pick a casino from the Live list")
+                              placeholder="Pick a casino from the Live list",
+                              key="casino_select")
+
+    # The SEO phrase is required and must be THIS casino's - it gets written verbatim
+    # into the review. A Streamlit widget otherwise keeps its typed value across
+    # reruns, so picking a new casino without touching this field silently carries the
+    # old casino's phrase into the new review. Clearing it here, before the widget is
+    # created, forces a fresh phrase every time the casino changes.
+    if st.session_state.get("_keyword_reset_for") != casino:
+        st.session_state["_keyword_reset_for"] = casino
+        st.session_state["keyword_input"] = ""
+
     with col2:
-        keyword = st.text_input("SEO phrase (must appear verbatim)",
-                                value="", placeholder="defaults to '<Casino> Casino Review'")
+        keyword = st.text_input("SEO phrase (required, must appear verbatim) *",
+                                placeholder="e.g. 'BitStarz Casino Review'",
+                                key="keyword_input")
 
     with st.expander("Options", expanded=False):
         effort = st.select_slider("Model effort", ["low", "medium", "high", "xhigh", "max"],
@@ -139,6 +151,12 @@ def main() -> None:
 
     if not casino:
         st.info("Pick a casino to begin.")
+        return
+
+    keyword = keyword.strip()
+    if not keyword:
+        st.warning("Enter the SEO phrase for this casino before generating - "
+                  "it's required and gets written into the review verbatim.")
         return
 
     if not st.button(f"Generate {casino} review", type="primary"):
@@ -169,7 +187,7 @@ def main() -> None:
         status.write(f"Writing with Claude Opus 5 (effort={effort})...")
         result = agent.generate_review(
             db, casino,
-            keyword=keyword.strip() or None,
+            keyword=keyword,
             history=ctx, signature_history=sig,
             effort=effort, do_revise=do_revise,
             progress=on_progress,
