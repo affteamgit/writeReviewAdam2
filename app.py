@@ -230,10 +230,24 @@ def main() -> None:
         st.success(f"[Open the Google Doc]({doc_url})")
     st.metric("Cost", f"${result['cost']:.2f}")
 
-    c1, c2, c3 = st.columns(3)
+    c1, c2, c3, c4 = st.columns(4)
     c1.metric("Characters", f"{len(review):,}")
     c2.metric("Words", f"{len(review.split()):,}")
     c3.metric("Links added", links_added)
+    leaks = result.get("repetition_leaks", [])
+    c4.metric("Repetition check", "0 leaked" if not leaks else f"{len(leaks)} leaked",
+             help=f"{result.get('banned_move_count', 0)} moves (openers, section "
+                  f"closers, phrases) were banned from the last {len(result['history_titles'])} "
+                  f"reviews in the window. This counts how many reappeared anyway - "
+                  f"computed by checking the actual text, not self-reported by the model.")
+
+    if leaks:
+        with st.expander(f"⚠️ {len(leaks)} banned move(s) reappeared anyway", expanded=True):
+            for l in leaks:
+                st.write(f"- {l}")
+    elif result.get("banned_move_count"):
+        st.caption(f"Repetition check: {result['banned_move_count']} moves banned from "
+                  f"the window ({', '.join(result['history_titles'])}), none reappeared.")
 
     for flag in result["data_flags"]:
         st.warning(f"Source data problem reported by the model:\n\n{flag}")

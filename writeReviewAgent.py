@@ -351,6 +351,20 @@ def build_dossier(db: CasinoDB, row: List[str]) -> str:
             n = count_list(value)
             out.append(f"- {label}: withheld - {n} entries, see DERIVED count below. "
                       f"Never enumerate this list; state the count and your judgment of it.")
+        elif i == COL["prod_trading"]:
+            # Confirmed the model was guessing at this one - it invented "a trading desk
+            # where you can buy and sell crypto in real time" for a feature it was never
+            # actually told the definition of, and separately collided the word with its
+            # unrelated everyday sense ("a brand that's been trading since 2014"). Give
+            # the real definition right where the fact appears, since a general
+            # definition in the criteria table is easy to miss the one time it matters.
+            out.append(
+                f"- {label}: {value} (this means a feature letting players bet on "
+                f"whether a cryptocurrency's price will go up or down - a price-"
+                f"prediction game, NOT literal buying/selling or an exchange. Unrelated "
+                f"to the everyday word 'trading' meaning 'operating as a business' - "
+                f"don't blend the two senses in the same sentence.)"
+            )
         else:
             out.append(f"- {label}: {value}")
 
@@ -591,15 +605,55 @@ def recurring_phrases(history: List[Tuple[str, str]], min_reviews: int = 2) -> L
     return hits[:40]
 
 
-def extract_signatures(history: List[Tuple[str, str]]) -> str:
-    """Pull the concrete moves already used, so the constraint is unmissable.
+_SECTION_HEADER_RE = re.compile(
+    # \*{0,2} rather than a literal \*\* on each side: a review sourced from the local
+    # .md pipeline has literal "**General**" markdown, but one read back from the Drive
+    # window (history.load_both_windows -> Drive's text/plain export) has already had
+    # all markdown stripped by Google Docs - the same line arrives as a bare "General".
+    # Matching only \*\* meant this regex silently matched zero lines against anything
+    # pulled from Drive, which is every review the live app's window has ever supplied -
+    # section-level opener/closer extraction has been dead code in production since
+    # go-live, not just missing closers. Caught by testing against a real Drive export
+    # rather than the local .md files used everywhere earlier in development.
+    r"^\*{0,2}(General|Payments|Games|Responsible Gambling|Bonuses)\*{0,2}\s*$",
+    re.MULTILINE,
+)
 
-    Handing over 5 full reviews gives texture, but a model reading them may not
-    notice it is about to reuse a move. An explicit list of the exact openers,
-    recurring phrasings and keyword sentences already spent is much harder to
-    drift past.
+
+def _section_boundary_lines(text: str) -> List[Tuple[str, str, str]]:
+    """(section, first_line, last_line) for each of the 5 body sections found in text.
+
+    Added after a real miss: the original extractor only ever captured the FIRST line
+    of a section, so a repeated CLOSING device was invisible to the "already spent"
+    list even though the model was shown the full prior text. Checked against 5 real
+    reviews: General closed 4/5 with a near-identical "no pop-ups... nothing broken"
+    formula, and Payments closed 3/5 sharing the literal string "in chat while your
+    balance is still" - neither would have been caught without this.
     """
-    openers, comparisons = [], set()
+    out = []
+    matches = list(_SECTION_HEADER_RE.finditer(text))
+    for idx, m in enumerate(matches):
+        section = m.group(1)
+        start = m.end()
+        end = matches[idx + 1].start() if idx + 1 < len(matches) else len(text)
+        lines = [ln.strip() for ln in text[start:end].splitlines() if ln.strip()]
+        if lines:
+            out.append((section, lines[0], lines[-1]))
+    return out
+
+
+def collect_signatures(history: List[Tuple[str, str]]) -> Dict[str, list]:
+    """Structured extraction of already-spent moves.
+
+    Split from the prompt-text formatting (format_signatures, below) so the exact same
+    computed list can be checked against the FINISHED review afterward (see
+    check_leakage) - a real audit of whether the mechanism worked, not the model's own
+    account of what it avoided.
+    """
+    openers: List[Tuple[str, str, str]] = []  # (title, label, text)
+    closers: List[Tuple[str, str, str]] = []
+    comparisons = set()
+
     for title, text in history:
         first = next(
             (ln.strip() for ln in text.splitlines()
@@ -607,38 +661,54 @@ def extract_signatures(history: List[Tuple[str, str]]) -> str:
             "",
         )
         if first:
-            openers.append(f'  - [{title}] opening line: "{first[:160]}"')
+            openers.append((title, "opening line", first[:160]))
         for m in re.finditer(r"\*\*(?:\[)?([A-Z][A-Za-z0-9\.\' ]{2,20})(?:\])?", text):
             comparisons.add(m.group(1).strip())
-        for m in re.finditer(r"^\*\*(General|Payments|Games|Responsible Gambling|Bonuses)\*\*\s*$",
-                             text, re.MULTILINE):
-            section = m.group(1)
-            rest = text[m.end():].lstrip().splitlines()
-            if rest:
-                openers.append(f'  - [{title}] {section} opens: "{rest[0].strip()[:140]}"')
+        for section, first_line, last_line in _section_boundary_lines(text):
+            openers.append((title, f"{section} opens", first_line[:140]))
+            closers.append((title, f"{section} closes", last_line[:160]))
 
-    out = ["ALREADY-SPENT MOVES - do not reuse or closely paraphrase any of these:"]
-    out += openers if openers else ["  (none)"]
-
-    # The SEO keyword sentence is a repetition magnet: it has a fixed job, so the
-    # same construction gets reached for every time (observed 3/3: "The tension in
-    # this <casino> Casino Review is..."). Quote them back explicitly.
-    keyword_sentences = []
+    # The SEO keyword sentence is a repetition magnet: it has a fixed job, so the same
+    # construction gets reached for every time (observed 3/3: "The tension in this
+    # <casino> Casino Review is...").
+    keyword_sentences: List[Tuple[str, str]] = []
     for title, text in history:
         for sentence in re.split(r"(?<=[.!?])\s+", _normalize(text)):
             if "casino review" in sentence:
-                keyword_sentences.append(f'  - [{title}] "{sentence.strip()[:150]}"')
+                keyword_sentences.append((title, sentence.strip()[:150]))
                 break
-    if keyword_sentences:
+
+    return {
+        "openers": openers,
+        "closers": closers,
+        "keyword_sentences": keyword_sentences,
+        "phrases": recurring_phrases(history),
+        "comparisons": comparisons,
+    }
+
+
+def format_signatures(sig: Dict[str, list]) -> str:
+    """Render collect_signatures()'s output as the prompt's 'already spent' block."""
+    out = ["ALREADY-SPENT MOVES - do not reuse or closely paraphrase any of these:"]
+    out += [f'  - [{t}] {label}: "{txt}"' for t, label, txt in sig["openers"]] or ["  (none)"]
+
+    if sig["closers"]:
+        out.append(
+            "\nHow each section ENDED last time. A closer repeats just as easily as an "
+            "opener and is checked the same way - land the section wherever the content "
+            "runs out, not on one of these specific moves again:"
+        )
+        out += [f'  - [{t}] {label}: "{txt}"' for t, label, txt in sig["closers"]]
+
+    if sig["keyword_sentences"]:
         out.append(
             "\nHow the SEO keyword phrase was worked in last time. This sentence has a "
             "fixed job, which makes it the easiest place in the whole review to fall into "
             "a template. Build yours a structurally different way:"
         )
-        out += keyword_sentences
+        out += [f'  - [{t}] "{txt}"' for t, txt in sig["keyword_sentences"]]
 
-    phrases = recurring_phrases(history)
-    if phrases:
+    if sig["phrases"]:
         out.append(
             "\nWORDINGS ALREADY RECURRING across those reviews (computed, not "
             "hand-picked). Two kinds are mixed together here, so treat them "
@@ -651,15 +721,60 @@ def extract_signatures(history: List[Tuple[str, str]]) -> str:
             "overlap - an awkward sentence is worse than a repeated one.\n"
             "The list:"
         )
-        out += [f'  - "{p}"' for p in phrases]
+        out += [f'  - "{p}"' for p in sig["phrases"]]
 
-    if comparisons:
+    if sig["comparisons"]:
         out.append(
             "\nBolded names appearing in those reviews (a name here is not banned, but "
             "if it keeps showing up as the go-to foil, pick a different, better-fitting "
-            "comparison from THE FIELD instead): " + ", ".join(sorted(comparisons)[:40])
+            "comparison from THE FIELD instead): " + ", ".join(sorted(sig["comparisons"])[:40])
         )
     return "\n".join(out)
+
+
+def _shared_8gram(a: str, b: str) -> Optional[str]:
+    """First run of 8+ consecutive words from a that appears verbatim in b, if any.
+
+    8 words is long enough that a hit is a real repeated construction, not two
+    sentences that happen to share a common phrase - the same bar recurring_phrases()
+    uses for judgment/fact separation, applied here to a single string pair.
+    """
+    words = a.split()
+    if len(words) < 8:
+        return None
+    for i in range(len(words) - 7):
+        gram = " ".join(words[i:i + 8])
+        if gram in b:
+            return gram
+    return None
+
+
+def check_leakage(new_review: str, sig: Dict[str, list]) -> List[str]:
+    """Did anything on the banned list survive into the finished review anyway?
+
+    Computed against the actual output rather than asked of the model, for the same
+    reason every other checkable fact in this pipeline is verified in code: a model
+    self-report risks confabulating a clean account regardless of what it actually
+    wrote. This is what the UI's "repetition check" is built from.
+    """
+    norm_new = _normalize(new_review)
+    hits: List[str] = []
+
+    for title, label, text in sig["openers"] + sig["closers"]:
+        gram = _shared_8gram(_normalize(text), norm_new)
+        if gram:
+            hits.append(f'{label} from [{title}] reappeared: "{gram}"')
+
+    for title, text in sig["keyword_sentences"]:
+        gram = _shared_8gram(text, norm_new)
+        if gram:
+            hits.append(f'keyword-sentence construction from [{title}] reappeared: "{gram}"')
+
+    for p in sig["phrases"]:
+        if p in norm_new:
+            hits.append(f'banned recurring phrase reappeared verbatim: "{p}"')
+
+    return hits
 
 
 # ----------------------------------------------------------------------------
@@ -713,6 +828,18 @@ and not in compounds either ("slot players", "crypto users"). Say "you" or name 
 reviews run a median of 17 and let about a fifth of sentences past 25. Favour clarity \
 over brevity and vary the rhythm.
 - Paragraphs 2-3 sentences.
+- Numbers are always digits, never spelled out - "4 languages" not "four languages", \
+"13 major studios" not "thirteen", "12 years" not "twelve". This holds regardless of \
+size and even at the start of a sentence, overriding normal English style.
+- VPN: describe it as a property of the casino ("VPN-friendly" / "not VPN-friendly"), \
+never as an observation about traffic. Do not write "VPN traffic is allowed/fine/welcome" \
+or "doesn't mind a VPN" - those describe testing that never happened.
+- Anonymity, restricted-country counts and language counts are facts you restate in \
+every review, which makes them the easiest place to fall into a fixed template without \
+ever repeating an exact phrase - "signup takes an email, so you stay anonymous" and "X \
+languages, real reach rather than a flag dropdown" are two such templates already caught \
+recurring. State the fact and your verdict; do not reach for a reusable construction to \
+dress it up.
 - No em dashes. No emojis.
 - Banned fluff: "fresh", "solid", "straightforward", "smooth", "game-changer".
 - No clichés ("kept me on the edge of my seat", "whether you're X or Y").
@@ -845,14 +972,13 @@ KYC = 0 hours: means NO identity verification at all (not "none up to a threshol
 Restricted countries: >40 is worth a warning so the reader checks eligibility first
 Casino age:   older than 5 years is a positive signal (survived, tightened security, refined UX).
               Under 5 years: say nothing about age.
-Buy crypto on site: a real convenience if you run short mid-session and don't want to
-              leave for an exchange, though it usually carries a markup - worth its own
-              clause either way, not a trailing mention on someone else's sentence.
-              Absent: you have to top up elsewhere before you can keep playing.
-Convert crypto in the casino: uncommon and genuinely useful when present - it means a
-              deposit in one coin doesn't lock you into cashing out in that same coin.
-              Absent (the norm): whatever you fund with is what you're playing and
-              withdrawing, worth a plain one-line note, not a big deal on its own.
+Buy crypto on site: present = a convenience, usually at a markup. Absent = a real
+              limitation worth naming, not a footnote. Worth its own clause either way -
+              form the specific angle yourself each time rather than reaching for the
+              same framing; it has already recurred near-verbatim across reviews.
+Convert crypto in the casino: uncommon and worth crediting when present. Absent is the
+              norm, so a plain one-line note is enough - don't build it into a bigger
+              point than it is.
 RG tools (besides self-exclusion): 3-4 above average | 1-2 average | 0 needs to step up
               Self-exclusion is the baseline every licensed casino should have.
               Cooling-off is uncommon; credit it when present.
@@ -922,11 +1048,17 @@ Before you write, think it through:
    how good this one is. Do not name the same handful of casinos every review reaches
    for, and do not compare on a metric where the difference is trivial. Not every
    section needs a comparison. Every number you attribute to a comparison casino must
-   come from THE FIELD list.
-3. Check the already-spent moves list. Your opening, your section openings, and your
-   rhetorical devices must not echo the recent reviews. Vary sentence-opening shapes:
-   number-first, verdict-first, a direct question, a short observation. Do not use the
-   same shape twice in one review.
+   come from THE FIELD list. Never invent an unnamed strawman to compare against
+   ("most casinos", "a flag dropdown", "some sites don't bother") - that isn't a real
+   comparison, it isn't falsifiable, and it's exactly the kind of line that turns into
+   a template you reach for every time a fact needs dressing up. Name a real casino
+   from THE FIELD, or skip the comparison and just state the fact.
+3. Check the already-spent moves list, and read it as covering openers AND closers -
+   a section can end wherever its content runs out, not on a device from that list.
+   Your opening, your section openings and endings, and your rhetorical devices must
+   not echo the recent reviews. Vary sentence-opening shapes: number-first,
+   verdict-first, a direct question, a short observation. Do not use the same shape
+   twice in one review.
 4. Verify every figure against the dossier before you commit to it.
 5. Never state a literal rank, position, or "Nth of 78" in the review - the dossier's
    field-standing lines are for your own fact-checking, not for the reader. Only frame
@@ -974,8 +1106,12 @@ Output only the corrected review, nothing else."""
 
 def assemble(db: CasinoDB, row: List[str], keyword: str, history: List[Tuple[str, str]],
              focus_name: str, signature_history: Optional[List[Tuple[str, str]]] = None
-             ) -> Tuple[list, str]:
-    """Returns (system_blocks, user_text).
+             ) -> Tuple[list, str, Dict[str, list]]:
+    """Returns (system_blocks, user_text, signatures).
+
+    signatures is collect_signatures()'s raw output - returned so the caller can run
+    check_leakage() against the finished review afterward, not just format the ban
+    list into the prompt.
 
     Cache boundary matters: render order is system -> messages, and any byte change
     invalidates everything after it. So everything stable (voice, criteria, the whole
@@ -1012,6 +1148,8 @@ def assemble(db: CasinoDB, row: List[str], keyword: str, history: List[Tuple[str
         "",
     ]
 
+    sig: Dict[str, list] = {"openers": [], "closers": [], "keyword_sentences": [],
+                            "phrases": [], "comparisons": set()}
     if history:
         parts.append(
             f"THE LAST {len(history)} REVIEWS PUBLISHED (newest first). These exist so this "
@@ -1024,7 +1162,8 @@ def assemble(db: CasinoDB, row: List[str], keyword: str, history: List[Tuple[str
         # Signatures come from the wider window (same-casino reviews included) - see
         # load_history(). The full texts above deliberately exclude them; the phrase
         # bans must not.
-        parts.append(extract_signatures(signature_history or history))
+        sig = collect_signatures(signature_history or history)
+        parts.append(format_signatures(sig))
         parts.append("")
     else:
         parts.append("(No prior reviews available for comparison this run.)\n")
@@ -1032,7 +1171,7 @@ def assemble(db: CasinoDB, row: List[str], keyword: str, history: List[Tuple[str
     parts.append(OUTPUT_SPEC.replace("{casino}", focus_name).replace("{keyword}", keyword))
     parts.append("")
     parts.append(TASK)
-    return system_blocks, "\n".join(parts)
+    return system_blocks, "\n".join(parts), sig
 
 
 # ----------------------------------------------------------------------------
@@ -1214,7 +1353,7 @@ def generate_review(
     history = history or []
     signature_history = signature_history if signature_history is not None else history
 
-    system_blocks, user_text = assemble(db, row, keyword, history, focus, signature_history)
+    system_blocks, user_text, sig = assemble(db, row, keyword, history, focus, signature_history)
     review, usage = generate(system_blocks, user_text, effort, max_tokens, progress=progress)
     total_cost = cost_of(usage)
 
@@ -1223,6 +1362,10 @@ def generate_review(
         review, revise_usage = revise(review, build_dossier(db, row), effort, max_tokens,
                                       progress=progress)
         total_cost += cost_of(revise_usage)
+
+    # Computed against the finished text, not asked of the model - see check_leakage()'s
+    # docstring for why a self-report isn't trusted here the way a code-checkable fact is.
+    repetition_leaks = check_leakage(review, sig)
 
     data_flags = [ln for ln in review.splitlines() if ln.strip().startswith("DATA FLAG:")]
     return {
@@ -1234,6 +1377,9 @@ def generate_review(
         "revise_usage": revise_usage,
         "data_flags": data_flags,
         "history_titles": [t for t, _ in history],
+        "banned_move_count": (len(sig["openers"]) + len(sig["closers"])
+                              + len(sig["keyword_sentences"]) + len(sig["phrases"])),
+        "repetition_leaks": repetition_leaks,
         "chars": len(review),
         "words": len(review.split()),
     }
@@ -1286,8 +1432,8 @@ def main() -> None:
         print(f"  + phrase bans also drawn from this casino's own past review(s): "
               f"[{', '.join(extra)}]", file=sys.stderr)
 
-    system_blocks, user_text = assemble(db, row, keyword, history, focus_name,
-                                        signature_history)
+    system_blocks, user_text, sig = assemble(db, row, keyword, history, focus_name,
+                                             signature_history)
 
     if args.dry_run:
         out = Path(f"prompt_{focus_name.replace(' ', '_')}.txt")
@@ -1325,6 +1471,17 @@ def main() -> None:
         for line in review.splitlines():
             if line.startswith("DATA FLAG:"):
                 print(f"  !! {line}", file=sys.stderr)
+
+    banned_count = (len(sig["openers"]) + len(sig["closers"])
+                   + len(sig["keyword_sentences"]) + len(sig["phrases"]))
+    leaks = check_leakage(review, sig)
+    print(f"\nRepetition check: {banned_count} move(s) banned from the window.", file=sys.stderr)
+    if leaks:
+        for l in leaks:
+            print(f"  LEAKED: {l}", file=sys.stderr)
+    else:
+        print("  none reappeared in this review." if banned_count else
+              "  (no window this run - nothing to check.)", file=sys.stderr)
     print(f"\nThis review is now part of the rolling window for the next run.", file=sys.stderr)
 
 
