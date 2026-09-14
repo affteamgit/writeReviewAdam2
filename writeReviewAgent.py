@@ -44,7 +44,6 @@ from __future__ import annotations
 
 import argparse
 import os
-import random
 import re
 import sys
 import time
@@ -644,13 +643,11 @@ def _section_boundary_lines(text: str) -> List[Tuple[str, str, str]]:
 
 
 def collect_signatures(history: List[Tuple[str, str]]) -> Dict[str, list]:
-    """Structured extraction of already-used moves (openers, closers, phrases).
-
-    Used only for the post-generation audit now (check_leakage, below), not injected
-    into the prompt as a ban list - see random_variety_directive() for why. Kept
-    computed here since it's still the right measurement of whether variety is
-    actually happening, even though it no longer tries to enforce it directly
-    account of what it avoided.
+    """Structured extraction of the model's own recent openers, closers and recurring
+    phrases. Used two ways: rendered into the prompt as reflective context (see
+    format_reflection, below - not a ban list), and checked against the finished
+    review afterward (see check_leakage) as a real audit of whether that reflection
+    actually changed anything, not a self-report.
     """
     openers: List[Tuple[str, str, str]] = []  # (title, label, text)
     closers: List[Tuple[str, str, str]] = []
@@ -689,63 +686,81 @@ def collect_signatures(history: List[Tuple[str, str]]) -> Dict[str, list]:
     }
 
 
-OPENING_STYLES = [
-    "a number-first sentence - lead with a specific figure from the dossier",
-    "a verdict-first sentence - state your judgment before any supporting fact",
-    "a direct question to the reader",
-    "a short, concrete observation - not a question, not a verdict, just a specific detail",
-    "naming a comparison casino from THE FIELD in the very first clause",
-]
+def format_reflection(sig: Dict[str, list]) -> str:
+    """Render collect_signatures()'s extraction as material for the model to reason
+    about, not a checklist to satisfy.
 
-# Semantically neutral on purpose - unrelated to casinos, writing, or emotion, so none
-# of them can plausibly bias tone or content. They exist only to perturb the model off
-# its single most probable continuation for this prompt, the same idea the old
-# pipeline's generate_presentation_plan() used with its nonce words.
-VARIETY_NONCE_WORDS = [
-    "lighthouse", "quartz", "marmalade", "tundra", "kazoo", "orbit", "sundial",
-    "aluminum", "papaya", "trombone", "granite", "compass", "lantern", "apricot",
-    "obelisk", "walnut", "ferry", "mitten", "spatula", "canyon", "thistle",
-    "harmonica", "pebble", "umbrella", "lattice", "marble", "satchel", "bungalow",
-    "cardigan", "silo", "tangerine", "kettle", "meadow", "buckle", "chisel",
-    "plaid", "veranda", "wicker", "cobalt", "driftwood", "gazebo", "jigsaw",
-]
+    This replaces TWO earlier attempts, in order, and the reasoning for rejecting both
+    matters for whatever comes after this one:
 
+    1. A literal ban list ("ALREADY-SPENT MOVES - do not reuse ANY of these"). Proven
+       to have a real ceiling, not just a theoretical one: "there's a casino, a
+       sportsbook and an esports book" was explicitly listed as already-spent and
+       still reappeared verbatim in 3 of 5 reviews in the same batch. Telling a model
+       not to reuse a specific thing it was directly shown does not reliably hold.
+    2. random.choice() over a small set of labeled opening styles, computed in code and
+       handed over as this run's assignment. Goran rejected this on sight, correctly:
+       a 5-option menu across a 5-review window collides on its own, and "write a
+       verdict-first sentence" is itself a instruction the model can satisfy with the
+       same canned verdict-first construction every time. It wasn't reasoning about
+       its own repetition, it was matching a label - a different mechanical rule, not
+       an escape from mechanical rules.
 
-def random_variety_directive() -> str:
-    """A per-run randomized set of structural choices - proactive variation instead of
-    a reactive ban list.
-
-    Replaces format_signatures()'s "already-spent moves, do not reuse" block in the
-    prompt (2026-09-12, per Goran's direction). Evidence the ban-list approach had hit
-    its ceiling: "there's a casino, a sportsbook and an esports book" was explicitly
-    listed as already-spent and still reappeared verbatim in 3 of 5 reviews in the same
-    batch - a phrase the model was directly told not to reuse, reused anyway. Asking a
-    model to track and avoid a growing list of specific past phrasings is the same
-    self-monitoring problem that already doesn't reliably work elsewhere in this
-    pipeline (sentence-length distributions, paragraph-opening frequency). The fix here
-    is the one that has actually worked before: hand over a concrete, randomly chosen
-    task for THIS run (which opening style, which nonce), computed in code rather than
-    left to the model to invent its own sense of "different enough".
-
-    Deliberately reads the full prior reviews (still shown above this block, unchanged)
-    for texture, not for a checklist - this directive only decides HOW this run opens
-    things, never WHAT it says.
+    What both attempts got wrong the same way: they tried to solve repetition FOR the
+    model, either by forbidding or by pre-deciding. This hands over the same accurately
+    extracted signal - openers, closers, recurring phrases, all still computed exactly
+    as before - but frames it as a writer's own working notes, and leaves the actual
+    judgment call (is this stale, does it matter, what would be genuinely different)
+    to the model's own reasoning against the real context, not a rule.
     """
-    overview_style = random.choice(OPENING_STYLES)
-    section_styles = {s: random.choice(OPENING_STYLES) for s in SECTIONS}
-    nonce = random.choice(VARIETY_NONCE_WORDS)
+    if not any(sig.values()):
+        return ""
 
-    lines = [
-        "THIS RUN'S STRUCTURAL DIRECTION - randomly chosen, not a fact. It decides HOW "
-        "you open things; it never supplies a fact, number, or claim:",
-        f"- Overview: open with {overview_style}.",
+    out = [
+        "A LOOK AT YOUR OWN LAST FEW REVIEWS - read this the way you'd reread your own "
+        "recent drafts before starting a new one, not as a list of rules. Below is "
+        "exactly how you opened and closed each section, and any phrasing that came up "
+        "more than once. None of it is forbidden. Some repetition is just the facts "
+        "having the same shape - Adam repeats himself too when a casino has no cap and "
+        "a stated minimum, there isn't ten ways to say that cleanly. What's worth "
+        "catching is a MOVE you're reaching for out of habit rather than because this "
+        "casino's facts actually call for it. Read it, notice what's actually a "
+        "pattern versus what's just plain English, and write this review as yourself "
+        "on a day when you're not repeating yourself.",
     ]
-    lines += [f"- {s}: open with {section_styles[s]}." for s in SECTIONS]
-    lines.append(
-        f"\nRandom seed for this run (the word itself means nothing - it exists only "
-        f"so this run doesn't default to your single most likely pattern): {nonce}"
-    )
-    return "\n".join(lines)
+
+    if sig["openers"]:
+        out.append("\nHow you opened things:")
+        out += [f'  - [{t}] {label}: "{txt}"' for t, label, txt in sig["openers"]]
+
+    if sig["closers"]:
+        out.append("\nHow you closed each section:")
+        out += [f'  - [{t}] {label}: "{txt}"' for t, label, txt in sig["closers"]]
+
+    if sig["keyword_sentences"]:
+        out.append(
+            "\nHow the SEO keyword phrase got worked in. This sentence has a fixed "
+            "job, which makes it the easiest place to fall into a template without "
+            "noticing:"
+        )
+        out += [f'  - [{t}] "{txt}"' for t, txt in sig["keyword_sentences"]]
+
+    if sig["phrases"]:
+        out.append(
+            "\nWordings that came up more than once (computed, not hand-picked - some "
+            "of these may just be the plain way to state a fact, judge each on its own):"
+        )
+        out += [f'  - "{p}"' for p in sig["phrases"]]
+
+    if sig["comparisons"]:
+        out.append(
+            "\nCasinos you named as comparisons recently (not off-limits, but if one "
+            "keeps becoming the go-to foil, ask whether a different casino from THE "
+            "FIELD would actually make the point better this time): "
+            + ", ".join(sorted(sig["comparisons"])[:40])
+        )
+
+    return "\n".join(out)
 
 
 def _shared_8gram(a: str, b: str) -> Optional[str]:
@@ -1069,12 +1084,16 @@ Before you write, think it through:
    comparison, it isn't falsifiable, and it's exactly the kind of line that turns into
    a template you reach for every time a fact needs dressing up. Name a real casino
    from THE FIELD, or skip the comparison and just state the fact.
-3. Check the already-spent moves list, and read it as covering openers AND closers -
-   a section can end wherever its content runs out, not on a device from that list.
-   Your opening, your section openings and endings, and your rhetorical devices must
-   not echo the recent reviews. Vary sentence-opening shapes: number-first,
-   verdict-first, a direct question, a short observation. Do not use the same shape
-   twice in one review.
+3. Read the look-at-your-own-last-few-reviews section below, if there is one, before
+   you write - the same way you'd reread your own recent drafts. It shows you your own
+   openers, closers and recurring phrasings; it is not a checklist and nothing in it
+   is forbidden. Use your own judgment: is a given move there because the facts
+   genuinely called for it, or because it's the path of least resistance? A section
+   can end wherever its content runs out, not on a device you notice you keep reaching
+   for. Vary sentence-opening shapes for real - number-first, verdict-first, a direct
+   question, a short observation - not by picking a label, but by actually noticing
+   what you did last time and choosing something that would read as different to
+   someone who just read all five.
 4. Verify every figure against the dossier before you commit to it.
 5. Never state a literal rank, position, or "Nth of 78" in the review - the dossier's
    field-standing lines are for your own fact-checking, not for the reader. Only frame
@@ -1164,10 +1183,10 @@ def assemble(db: CasinoDB, row: List[str], keyword: str, history: List[Tuple[str
         "",
     ]
 
-    # sig is still computed even though it's no longer injected into the prompt as a
-    # ban list (see random_variety_directive() for why) - generate_review() uses it
-    # after the fact, via check_leakage(), as a measurement of whether variation is
-    # actually happening. Detection and correction are deliberately decoupled now.
+    # sig is used two ways below: rendered as reflective context in the prompt itself
+    # (format_reflection), and returned so generate_review() can run check_leakage()
+    # against the FINISHED review afterward - a real audit of whether reflection
+    # actually changed anything, independent of whatever the model did with it.
     sig: Dict[str, list] = {"openers": [], "closers": [], "keyword_sentences": [],
                             "phrases": [], "comparisons": set()}
     if history:
@@ -1179,9 +1198,11 @@ def assemble(db: CasinoDB, row: List[str], keyword: str, history: List[Tuple[str
         )
         for title, text in history:
             parts.append(f"----- BEGIN PRIOR REVIEW: {title} -----\n{text}\n----- END -----\n")
-        parts.append(random_variety_directive())
-        parts.append("")
         sig = collect_signatures(signature_history or history)
+        reflection = format_reflection(sig)
+        if reflection:
+            parts.append(reflection)
+        parts.append("")
     else:
         parts.append("(No prior reviews available for comparison this run.)\n")
 
