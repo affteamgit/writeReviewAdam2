@@ -44,6 +44,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import random
 import re
 import sys
 import time
@@ -643,11 +644,12 @@ def _section_boundary_lines(text: str) -> List[Tuple[str, str, str]]:
 
 
 def collect_signatures(history: List[Tuple[str, str]]) -> Dict[str, list]:
-    """Structured extraction of already-spent moves.
+    """Structured extraction of already-used moves (openers, closers, phrases).
 
-    Split from the prompt-text formatting (format_signatures, below) so the exact same
-    computed list can be checked against the FINISHED review afterward (see
-    check_leakage) - a real audit of whether the mechanism worked, not the model's own
+    Used only for the post-generation audit now (check_leakage, below), not injected
+    into the prompt as a ban list - see random_variety_directive() for why. Kept
+    computed here since it's still the right measurement of whether variety is
+    actually happening, even though it no longer tries to enforce it directly
     account of what it avoided.
     """
     openers: List[Tuple[str, str, str]] = []  # (title, label, text)
@@ -687,49 +689,63 @@ def collect_signatures(history: List[Tuple[str, str]]) -> Dict[str, list]:
     }
 
 
-def format_signatures(sig: Dict[str, list]) -> str:
-    """Render collect_signatures()'s output as the prompt's 'already spent' block."""
-    out = ["ALREADY-SPENT MOVES - do not reuse or closely paraphrase any of these:"]
-    out += [f'  - [{t}] {label}: "{txt}"' for t, label, txt in sig["openers"]] or ["  (none)"]
+OPENING_STYLES = [
+    "a number-first sentence - lead with a specific figure from the dossier",
+    "a verdict-first sentence - state your judgment before any supporting fact",
+    "a direct question to the reader",
+    "a short, concrete observation - not a question, not a verdict, just a specific detail",
+    "naming a comparison casino from THE FIELD in the very first clause",
+]
 
-    if sig["closers"]:
-        out.append(
-            "\nHow each section ENDED last time. A closer repeats just as easily as an "
-            "opener and is checked the same way - land the section wherever the content "
-            "runs out, not on one of these specific moves again:"
-        )
-        out += [f'  - [{t}] {label}: "{txt}"' for t, label, txt in sig["closers"]]
+# Semantically neutral on purpose - unrelated to casinos, writing, or emotion, so none
+# of them can plausibly bias tone or content. They exist only to perturb the model off
+# its single most probable continuation for this prompt, the same idea the old
+# pipeline's generate_presentation_plan() used with its nonce words.
+VARIETY_NONCE_WORDS = [
+    "lighthouse", "quartz", "marmalade", "tundra", "kazoo", "orbit", "sundial",
+    "aluminum", "papaya", "trombone", "granite", "compass", "lantern", "apricot",
+    "obelisk", "walnut", "ferry", "mitten", "spatula", "canyon", "thistle",
+    "harmonica", "pebble", "umbrella", "lattice", "marble", "satchel", "bungalow",
+    "cardigan", "silo", "tangerine", "kettle", "meadow", "buckle", "chisel",
+    "plaid", "veranda", "wicker", "cobalt", "driftwood", "gazebo", "jigsaw",
+]
 
-    if sig["keyword_sentences"]:
-        out.append(
-            "\nHow the SEO keyword phrase was worked in last time. This sentence has a "
-            "fixed job, which makes it the easiest place in the whole review to fall into "
-            "a template. Build yours a structurally different way:"
-        )
-        out += [f'  - [{t}] "{txt}"' for t, txt in sig["keyword_sentences"]]
 
-    if sig["phrases"]:
-        out.append(
-            "\nWORDINGS ALREADY RECURRING across those reviews (computed, not "
-            "hand-picked). Two kinds are mixed together here, so treat them "
-            "differently:\n"
-            "  * A JUDGMENT or stock reaction (an opinion, a verdict, a piece of "
-            "attitude): drop it entirely. Do not reword it. Make a different point, "
-            "or make this one from a different angle.\n"
-            "  * The plain way of stating a FACT: keep stating the fact, just build "
-            "the sentence differently. Do not contort plain English to avoid an "
-            "overlap - an awkward sentence is worse than a repeated one.\n"
-            "The list:"
-        )
-        out += [f'  - "{p}"' for p in sig["phrases"]]
+def random_variety_directive() -> str:
+    """A per-run randomized set of structural choices - proactive variation instead of
+    a reactive ban list.
 
-    if sig["comparisons"]:
-        out.append(
-            "\nBolded names appearing in those reviews (a name here is not banned, but "
-            "if it keeps showing up as the go-to foil, pick a different, better-fitting "
-            "comparison from THE FIELD instead): " + ", ".join(sorted(sig["comparisons"])[:40])
-        )
-    return "\n".join(out)
+    Replaces format_signatures()'s "already-spent moves, do not reuse" block in the
+    prompt (2026-09-12, per Goran's direction). Evidence the ban-list approach had hit
+    its ceiling: "there's a casino, a sportsbook and an esports book" was explicitly
+    listed as already-spent and still reappeared verbatim in 3 of 5 reviews in the same
+    batch - a phrase the model was directly told not to reuse, reused anyway. Asking a
+    model to track and avoid a growing list of specific past phrasings is the same
+    self-monitoring problem that already doesn't reliably work elsewhere in this
+    pipeline (sentence-length distributions, paragraph-opening frequency). The fix here
+    is the one that has actually worked before: hand over a concrete, randomly chosen
+    task for THIS run (which opening style, which nonce), computed in code rather than
+    left to the model to invent its own sense of "different enough".
+
+    Deliberately reads the full prior reviews (still shown above this block, unchanged)
+    for texture, not for a checklist - this directive only decides HOW this run opens
+    things, never WHAT it says.
+    """
+    overview_style = random.choice(OPENING_STYLES)
+    section_styles = {s: random.choice(OPENING_STYLES) for s in SECTIONS}
+    nonce = random.choice(VARIETY_NONCE_WORDS)
+
+    lines = [
+        "THIS RUN'S STRUCTURAL DIRECTION - randomly chosen, not a fact. It decides HOW "
+        "you open things; it never supplies a fact, number, or claim:",
+        f"- Overview: open with {overview_style}.",
+    ]
+    lines += [f"- {s}: open with {section_styles[s]}." for s in SECTIONS]
+    lines.append(
+        f"\nRandom seed for this run (the word itself means nothing - it exists only "
+        f"so this run doesn't default to your single most likely pattern): {nonce}"
+    )
+    return "\n".join(lines)
 
 
 def _shared_8gram(a: str, b: str) -> Optional[str]:
@@ -1148,23 +1164,24 @@ def assemble(db: CasinoDB, row: List[str], keyword: str, history: List[Tuple[str
         "",
     ]
 
+    # sig is still computed even though it's no longer injected into the prompt as a
+    # ban list (see random_variety_directive() for why) - generate_review() uses it
+    # after the fact, via check_leakage(), as a measurement of whether variation is
+    # actually happening. Detection and correction are deliberately decoupled now.
     sig: Dict[str, list] = {"openers": [], "closers": [], "keyword_sentences": [],
                             "phrases": [], "comparisons": set()}
     if history:
         parts.append(
-            f"THE LAST {len(history)} REVIEWS PUBLISHED (newest first). These exist so this "
-            "review does not read like them. Study their rhythm, their openers and their "
-            "habits, then do something different. Do not copy their structure, and do not "
+            f"THE LAST {len(history)} REVIEWS PUBLISHED (newest first). Read them for "
+            "rhythm and habits, then write this one with real variability from them - "
+            "a different shape, not just different words for the same shape. Do not "
             "treat any fact in them as applying to this casino.\n"
         )
         for title, text in history:
             parts.append(f"----- BEGIN PRIOR REVIEW: {title} -----\n{text}\n----- END -----\n")
-        # Signatures come from the wider window (same-casino reviews included) - see
-        # load_history(). The full texts above deliberately exclude them; the phrase
-        # bans must not.
-        sig = collect_signatures(signature_history or history)
-        parts.append(format_signatures(sig))
+        parts.append(random_variety_directive())
         parts.append("")
+        sig = collect_signatures(signature_history or history)
     else:
         parts.append("(No prior reviews available for comparison this run.)\n")
 
