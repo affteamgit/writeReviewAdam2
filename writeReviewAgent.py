@@ -355,15 +355,20 @@ def build_dossier(db: CasinoDB, row: List[str]) -> str:
             # Confirmed the model was guessing at this one - it invented "a trading desk
             # where you can buy and sell crypto in real time" for a feature it was never
             # actually told the definition of, and separately collided the word with its
-            # unrelated everyday sense ("a brand that's been trading since 2014"). Give
-            # the real definition right where the fact appears, since a general
-            # definition in the criteria table is easy to miss the one time it matters.
+            # unrelated everyday sense ("a brand that's been trading since 2014"). A first
+            # fix gave the real definition in flowing prose right where the fact appears -
+            # which promptly became its own leak: "a price-prediction game for betting on
+            # which way a coin moves" turned up near-verbatim in 3 of 5 reviews, because a
+            # complete, quotable sentence in the dossier gets treated as ready-made prose
+            # to lift, the same failure as the buy-crypto/AML criteria entries earlier.
+            # Stated clinically instead - the disambiguating facts a writer needs, not a
+            # sentence shaped to be reused.
             out.append(
-                f"- {label}: {value} (this means a feature letting players bet on "
-                f"whether a cryptocurrency's price will go up or down - a price-"
-                f"prediction game, NOT literal buying/selling or an exchange. Unrelated "
-                f"to the everyday word 'trading' meaning 'operating as a business' - "
-                f"don't blend the two senses in the same sentence.)"
+                f"- {label}: {value} (disambiguation, not phrasing to reuse - this "
+                f"product: predicts price direction; unrelated to 'trading' meaning "
+                f"'operating as a business'; do not describe it with exchange/stock-"
+                f"market imagery like 'trading desk' or 'buy and sell crypto', which "
+                f"overstate what it is - if you mention it, put it in your own words.)"
             )
         else:
             out.append(f"- {label}: {value}")
@@ -720,22 +725,56 @@ def format_reflection(sig: Dict[str, list]) -> str:
         "A LOOK AT YOUR OWN LAST FEW REVIEWS - read this the way you'd reread your own "
         "recent drafts before starting a new one, not as a list of rules. Below is "
         "exactly how you opened and closed each section, and any phrasing that came up "
-        "more than once. None of it is forbidden. Some repetition is just the facts "
-        "having the same shape - Adam repeats himself too when a casino has no cap and "
-        "a stated minimum, there isn't ten ways to say that cleanly. What's worth "
-        "catching is a MOVE you're reaching for out of habit rather than because this "
-        "casino's facts actually call for it. Read it, notice what's actually a "
-        "pattern versus what's just plain English, and write this review as yourself "
-        "on a day when you're not repeating yourself.",
+        "more than once.\n"
+        "The STRUCTURE below is fine and does not need to change - a section can end on "
+        "the same kind of fact every time (Games ending on provably-fair and in-house, "
+        "Bonuses closing on the loyalty club) without that being a problem. What matters "
+        "is whether you are reaching for the same SENTENCE to say it. If two of the "
+        "closers below are basically the same words in the same order, that is the "
+        "thing to fix - say the same fact in a genuinely different sentence, not a "
+        "different position or a different fact. Some repetition really is just the "
+        "facts having the same shape (Adam repeats himself too when a casino has no cap "
+        "and a stated minimum - there isn't ten ways to say that cleanly), so use "
+        "judgment: is this wording load-bearing, or is it a groove you're stuck in?",
     ]
 
-    if sig["openers"]:
-        out.append("\nHow you opened things:")
-        out += [f'  - [{t}] {label}: "{txt}"' for t, label, txt in sig["openers"]]
+    review_openers = [(t, txt) for t, label, txt in sig["openers"] if label == "opening line"]
+    if review_openers:
+        out.append("\nHow you opened the review overall (Overview's first line):")
+        out += [f'  - [{t}]: "{txt}"' for t, txt in review_openers]
 
-    if sig["closers"]:
-        out.append("\nHow you closed each section:")
-        out += [f'  - [{t}] {label}: "{txt}"' for t, label, txt in sig["closers"]]
+    # Grouped BY SECTION, not by review - the previous review-first grouping let a
+    # wording repeat hide in plain sight: Games' closer from review 1 sat pages away
+    # from Games' closer from review 4, so nothing made the near-identical sentence
+    # ("some titles are provably fair, so you can check/verify a result yourself...
+    # in-house originals...") obvious. Stacking the same section's last few closers
+    # adjacent makes reused wording visible on sight, not something to infer from
+    # examples scattered across a much longer read.
+    opens_by_section: Dict[str, list] = {s: [] for s in SECTIONS}
+    for t, label, txt in sig["openers"]:
+        section = label.rsplit(" ", 1)[0]
+        if section in opens_by_section:
+            opens_by_section[section].append((t, txt))
+
+    closes_by_section: Dict[str, list] = {s: [] for s in SECTIONS}
+    for t, label, txt in sig["closers"]:
+        section = label.rsplit(" ", 1)[0]
+        if section in closes_by_section:
+            closes_by_section[section].append((t, txt))
+
+    if any(opens_by_section.values()) or any(closes_by_section.values()):
+        out.append(
+            "\nHow you've opened and closed each SECTION, grouped by section so reused "
+            "wording is obvious at a glance. Same topic in the same spot is fine - "
+            "matching words are not:"
+        )
+        for s in SECTIONS:
+            opens, closes = opens_by_section[s], closes_by_section[s]
+            if not opens and not closes:
+                continue
+            out.append(f"\n  {s}:")
+            out += [f'    opened [{t}]: "{txt}"' for t, txt in opens]
+            out += [f'    closed [{t}]: "{txt}"' for t, txt in closes]
 
     if sig["keyword_sentences"]:
         out.append(
@@ -1085,15 +1124,15 @@ Before you write, think it through:
    a template you reach for every time a fact needs dressing up. Name a real casino
    from THE FIELD, or skip the comparison and just state the fact.
 3. Read the look-at-your-own-last-few-reviews section below, if there is one, before
-   you write - the same way you'd reread your own recent drafts. It shows you your own
-   openers, closers and recurring phrasings; it is not a checklist and nothing in it
-   is forbidden. Use your own judgment: is a given move there because the facts
-   genuinely called for it, or because it's the path of least resistance? A section
-   can end wherever its content runs out, not on a device you notice you keep reaching
-   for. Vary sentence-opening shapes for real - number-first, verdict-first, a direct
-   question, a short observation - not by picking a label, but by actually noticing
-   what you did last time and choosing something that would read as different to
-   someone who just read all five.
+   you write - the same way you'd reread your own recent drafts. It groups your own
+   openers and closers by section, so you can see at a glance whether you keep reaching
+   for the same SENTENCE. This is not about structure - a section ending on the same
+   kind of fact every time (Games on provably-fair, Bonuses on the loyalty club) is
+   completely fine, that's just where those facts belong. The thing to catch is
+   wording: if two entries under the same section are basically the same words in the
+   same order, say that fact in a genuinely different sentence this time - different
+   words, different rhythm, maybe a different vantage point - without moving where it
+   sits or inventing a reason to skip it.
 4. Verify every figure against the dossier before you commit to it.
 5. Never state a literal rank, position, or "Nth of 78" in the review - the dossier's
    field-standing lines are for your own fact-checking, not for the reader. Only frame
