@@ -59,7 +59,17 @@ import config
 
 SPREADSHEET_ID = config.get("SPREADSHEET_ID")
 
-MODEL = "claude-opus-5"
+MODEL = "claude-fable-5-1"
+# Switched from claude-opus-5 to Fable 5.1 for review writing (2026-09-18, Goran's
+# call, made after seeing the real cost delta: Fable runs ~2x Opus per review here -
+# $10/$50 vs $5/$25 per MTok in/out, plus a pricier 1h cache write ($20 vs $10/MTok)
+# only partly offset by a cheaper cache-read rate ($0.25 vs $0.50/MTok). No quality
+# comparison against Opus has been run yet on this specific voice-matching task.
+# cost_of() below was updated to Fable's rates in the same change - it is NOT
+# model-aware, it just hardcodes whichever model MODEL currently points to, so if
+# MODEL changes again, cost_of() needs a matching edit or every displayed cost will
+# be silently wrong (exactly the bug just found and fixed in the Opus cache-write
+# rate right before this switch).
 # Which site's status column / bonus rows apply. StatusLog col F is Gamblineers.
 SITE = config.get("GAMBLINEERS_SITE")
 
@@ -1391,15 +1401,19 @@ def report_cost(label: str, usage) -> None:
 
 
 def cost_of(usage) -> float:
-    """Approximate USD for one call. Opus 5: $5/1M in, $25/1M out, cache read ~0.1x,
-    cache write ~1.25x."""
+    """Approximate USD for one call. Fable 5.1 (MODEL as of 2026-09-18): $10/1M in,
+    $50/1M out, cache read 0.025x ($0.25 - Fable's cache-hit multiplier is 4x cheaper
+    than Opus's 0.1x). Cache write is 2x base ($20) because assemble() writes with
+    ttl="1h", not the 5-minute default (1.25x/$12.50) - rates confirmed against
+    platform.claude.com/docs pricing 2026-09-18. NOT model-aware: hardcoded to
+    whatever MODEL currently is, update both together."""
     if usage is None:
         return 0.0
     inp = getattr(usage, "input_tokens", 0) or 0
     out = getattr(usage, "output_tokens", 0) or 0
     c_read = getattr(usage, "cache_read_input_tokens", 0) or 0
     c_write = getattr(usage, "cache_creation_input_tokens", 0) or 0
-    return (inp * 5 + c_read * 0.5 + c_write * 6.25 + out * 25) / 1_000_000
+    return (inp * 10 + c_read * 0.25 + c_write * 20 + out * 50) / 1_000_000
 
 
 # ----------------------------------------------------------------------------
