@@ -24,10 +24,15 @@ import time
 from typing import Dict, List, Optional, Tuple
 
 SECTION_TITLES = ["Overview", "TLDR", "General", "Payments", "Games",
-                  "Responsible Gambling", "Bonuses"]
+                  "Responsible Gambling", "Bonuses", "FAQ"]
 BONUS_HEADING_FONT_SIZE = 14  # between the 16pt section headers and 11pt body
 
 _H3_PATTERN = re.compile(r"^###\s+(.+)$", re.MULTILINE)
+# Jacob/BCK's per-question headers ("## Q: Is X legit?") - level-2, not level-3 like
+# Adam2's bonus headings, and carrying a literal "Q: " prefix that shouldn't survive
+# into the doc. Matched and stripped in one place (this pattern) so extraction here
+# and the fold-to-bold stripping in normalize_markdown() can never drift apart.
+_QA_HEADER_PATTERN = re.compile(r"^##\s+Q:\s*(.+)$", re.MULTILINE)
 
 _NESTED_LINK_PATTERN = re.compile(r"\[([^\]]+?)\]\((https?://[^\)]+)\)")
 
@@ -170,24 +175,31 @@ def _extract_nested_links(bold_text: str, base_cursor: int) -> Tuple[str, List[d
 # ---------------------------------------------------------------------------
 
 def extract_h3_headers(review_text: str) -> List[str]:
-    """Bonus-name headings ("### Exclusive No Deposit Bonus") as written by the model,
-    captured before normalize_markdown folds every heading level into a plain bold span.
-    Matching this exact stripped text later lets _structure_requests give each one a
-    distinct size without needing a fixed list of bonus names - they're free text.
+    """Bonus-name headings ("### Exclusive No Deposit Bonus") and Jacob/BCK's
+    per-question headers ("## Q: Is X legit?", captured WITHOUT the "Q: " prefix - see
+    _QA_HEADER_PATTERN) as written by the model, captured before normalize_markdown
+    folds every heading level into a plain bold span. Matching this exact stripped
+    text later lets _structure_requests give each one a distinct size without needing
+    a fixed list of bonus/question names - they're free text. Empty on Adam2 content,
+    which has no "## Q: " headers.
     """
-    return [m.strip() for m in _H3_PATTERN.findall(review_text)]
+    return ([m.strip() for m in _H3_PATTERN.findall(review_text)]
+            + [m.strip() for m in _QA_HEADER_PATTERN.findall(review_text)])
 
 
 def normalize_markdown(review_text: str) -> str:
     """Tidy the few markdown forms that would otherwise upload as literal characters.
 
     The generator is told to emit only bold, bullets, links and "### Bonus Name"
-    headings inside Bonuses - but the document title legitimately arrives as
-    "# Casino review", and any other stray heading level would render as literal
-    hashes rather than a heading. Handled here so the parser downstream only ever sees
-    the markup it knows about. "###" is folded to a plain bold span like everything
-    else at this stage; the distinct size for a bonus heading is applied afterward by
-    _structure_requests, matching against extract_h3_headers()'s output.
+    headings inside Bonuses (Adam2) or "## Q: <header>" per-question headings (Jacob/
+    BCK) - but the document title legitimately arrives as "# Casino review", and any
+    other stray heading level would render as literal hashes rather than a heading.
+    Handled here so the parser downstream only ever sees the markup it knows about.
+    Every deeper heading is folded to a plain bold span like everything else at this
+    stage; a leading "Q: " is stripped first so the doc reads "**Is X legit?**" rather
+    than "**Q: Is X legit?**". The distinct size for a bonus/question heading is
+    applied afterward by _structure_requests, matching against extract_h3_headers()'s
+    output - which strips the same "Q: " prefix, so the two can never drift apart.
     """
     lines = review_text.split("\n")
     for i, line in enumerate(lines):
@@ -197,7 +209,9 @@ def normalize_markdown(review_text: str) -> str:
             lines[i] = re.sub(r"^#\s+", "", line)
             break
     text = "\n".join(lines)
-    # Any deeper heading becomes bold, matching how section headers are already written.
+    text = re.sub(r"^#{2,6}\s+Q:\s*(.+)$", r"**\1**", text, flags=re.MULTILINE)
+    # Any remaining deeper heading becomes bold, matching how section headers are
+    # already written.
     text = re.sub(r"^#{2,6}\s+(.+)$", r"**\1**", text, flags=re.MULTILINE)
     return text
 

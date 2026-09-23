@@ -1,26 +1,42 @@
 """
-config.py - credential and setting resolution shared by the CLI and the Streamlit app.
+config.py - credential and setting resolution shared by both sites' CLIs and the
+merged Streamlit app (Gamblineers/Adam via writeReviewAgent.py, BCK/Jakob via
+writeReviewJacobAgent.py + casino_data.py).
 
-Exists so writeReviewAgent.py can run both ways without branching on its environment:
+Exists so the agent modules can run both ways without branching on their environment:
 under Streamlit the values come from st.secrets, from a shell they come from env vars
 and a key file on disk. Resolution order is st.secrets -> environment -> local file,
 first match wins, so a deployed app never silently falls back to a developer's laptop
 credentials and a local run never needs Streamlit installed.
+
+Merged from writeReviewJacob's originally-separate config.py (2026-09-22, confirmed
+identical service-account/spreadsheet resolution logic between the two - no behavior
+change for either site, just one shared file instead of two near-duplicates).
 """
 
 from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Dict, Optional
 
 # Defaults; every one can be overridden by a secret or an env var of the same name.
+# SPREADSHEET_ID and the service account are shared by both sites (confirmed directly,
+# not assumed - both sites' casino data lives in one "Casino Data" sheet under one
+# service account). GAMBLINEERS_SITE/SITEMAP_URL are Adam-only (linking.py's internal-
+# linking pass). SITE/CALCULATION_SPREADSHEET_ID/AFF_SITES_SPREADSHEET_ID/AFF_SITES_TAB
+# are BCK-only (casino_data.py's CasinoDB site selection and the Evolution system's
+# WP-ID/last-updated-date lookups).
 DEFAULTS = {
     "SPREADSHEET_ID": "1ZneRUz90Ne06pr8CCax8vp30tOtPpKJQCw5ikE-uB_0",
     "GAMBLINEERS_SITE": "Gamblineers",
+    "SITE": "BCK",
     "GOOGLE_SERVICE_ACCOUNT_FILE":
         "/Users/gorandelic/Desktop/Work/reviewChecker/service_accountNew.json",
     "SITEMAP_URL": "https://gamblineers.com/post-sitemap.xml",
+    "CALCULATION_SPREADSHEET_ID": "1av0ZgZQGPWErmlzFmCIyZg1ApkzOQPht2AUoB_MGvLg",
+    "AFF_SITES_SPREADSHEET_ID": "1s7FcUQN57SnQ3Ihq2iewoPf5TpivX4PYmCo8zQCIocc",
+    "AFF_SITES_TAB": "BCK",
 }
 
 SCOPES = [
@@ -76,6 +92,33 @@ def require(name: str) -> str:
 
 def anthropic_api_key() -> str:
     return require("ANTHROPIC_API_KEY")
+
+
+def mysql_config() -> Optional[Dict[str, str]]:
+    """The WordPress DB connection details for BCK's Evolution system, or None if unset.
+
+    None (not an exception) on purpose: fetch_old_review_from_mysql() already treats a
+    missing/failed connection as "skip the Evolution comparison for this run" rather
+    than a hard failure - a previous-review comparison is a nice-to-have enrichment,
+    never something a generation should die over.
+    """
+    secrets = _secrets()
+    if secrets is not None:
+        try:
+            if "mysql" in secrets:
+                return dict(secrets["mysql"])
+        except Exception:
+            pass
+    host = os.environ.get("MYSQL_HOST")
+    if not host:
+        return None
+    return {
+        "host": host,
+        "port": os.environ.get("MYSQL_PORT", "3306"),
+        "user": os.environ.get("MYSQL_USER", ""),
+        "password": os.environ.get("MYSQL_PASSWORD", ""),
+        "database": os.environ.get("MYSQL_DATABASE", ""),
+    }
 
 
 def google_credentials():
