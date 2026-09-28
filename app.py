@@ -269,7 +269,10 @@ def main() -> None:
                 fetch_player_feedback=fetch_player_feedback,
                 progress=on_progress,
             )
-        review = result["review"]
+        # DATA FLAG lines are notes for us, shown in the warning box below - never
+        # part of the published document.
+        review = "\n".join(ln for ln in result["review"].splitlines()
+                           if not ln.strip().startswith("DATA FLAG:")).rstrip() + "\n"
 
         links_added = 0
         if do_link:
@@ -335,7 +338,10 @@ def main() -> None:
         st.caption(f"Evolution (previous-review comparison): {result.get('evolution_status', 'skipped')}")
 
     for flag in result["data_flags"]:
-        st.warning(f"Source data problem reported by the model:\n\n{flag}")
+        st.warning("Source data problem reported by the model:\n\n" + flag.replace("$", "\\$"))
+
+    if result.get("missing_sections"):
+        st.warning("Missing section title(s): " + ", ".join(result["missing_sections"]))
 
     with st.expander("Read the review", expanded=True):
         # Escape $ so Streamlit doesn't read dollar amounts as LaTeX math.

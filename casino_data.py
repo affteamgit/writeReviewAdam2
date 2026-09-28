@@ -573,11 +573,21 @@ def fetch_evolution_context(casino_id: str, casino_name: str) -> Tuple[str, str]
 # PLAYER FEEDBACK - live scraping, kept per-generation per Goran's explicit choice
 # ----------------------------------------------------------------------------
 
-def scrape_player_feedback(casino_name: str) -> Dict:
+def _domain_of(website: str) -> str:
+    """'https://www.7bitcasino.com/' -> '7bitcasino.com'. '' if there's no URL."""
+    host = re.sub(r"^[a-z]+://", "", (website or "").strip().lower()).split("/")[0]
+    return re.sub(r"^www\.", "", host)
+
+
+def scrape_player_feedback(casino_name: str, website: str = "") -> Dict:
     """AskGamblers + Trustpilot reviews for a casino. {} if neither source has any.
 
     Both scrapers already exist in this repo (askgamblers_scraper.py,
     trustpilot_scraper.py) and are reused unchanged - this only orchestrates them.
+
+    Trustpilot pages are keyed by domain, so the casino's real website (database
+    column B) is tried before the scraper's guesses from the name: those guess
+    "7bit.com" for 7Bit, whose site is 7bitcasino.com - 0 reviews found (2026-09-28).
     """
     from askgamblers_scraper import AskGamblersScraper  # noqa: PLC0415
     from trustpilot_scraper import TrustpilotScraper  # noqa: PLC0415
@@ -591,13 +601,16 @@ def scrape_player_feedback(casino_name: str) -> Dict:
     except Exception as e:  # noqa: BLE001
         print(f"AskGamblers scrape failed for {casino_name}: {e}")
 
-    try:
-        tp = TrustpilotScraper(timeout=30).scrape_casino_reviews(casino_name, max_reviews=50, months=6)
-        if tp.get("reviews"):
-            all_reviews.extend(tp["reviews"])
-            sources.append("Trustpilot")
-    except Exception as e:  # noqa: BLE001
-        print(f"Trustpilot scrape failed for {casino_name}: {e}")
+    domain = _domain_of(website)
+    for target in dict.fromkeys(t for t in (domain, casino_name) if t):
+        try:
+            tp = TrustpilotScraper(timeout=30).scrape_casino_reviews(target, max_reviews=50, months=6)
+            if tp.get("reviews"):
+                all_reviews.extend(tp["reviews"])
+                sources.append("Trustpilot")
+                break
+        except Exception as e:  # noqa: BLE001
+            print(f"Trustpilot scrape failed for {target}: {e}")
 
     if not all_reviews:
         return {}

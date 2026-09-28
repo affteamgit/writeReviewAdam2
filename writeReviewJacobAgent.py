@@ -602,8 +602,47 @@ _QA_PATTERN = re.compile(r"^##\s*Q:\s*(.+?)\s*$\n+(.*?)(?=\n##\s*Q:|\Z)",
 
 
 def parse_qa_pairs(text: str) -> List[Tuple[str, str]]:
-    """(question header, answer body) pairs from a rendered review's markdown."""
-    return [(h.strip(), b.strip()) for h, b in _QA_PATTERN.findall(text)]
+    """(question header, answer body) pairs from a review, in either form it arrives in.
+
+    Markdown (the model's own output, local reviews_jakob/*.md) carries '## Q:' markers.
+    The live rolling window does not: history.py exports Drive docs as text/plain, where
+    the question headers are just bare lines. Only the markdown form used to be parsed,
+    which left the whole reflection block silently empty on the live app (found
+    2026-09-28 - 0 pairs from every Drive doc, and cross-review repetition to match).
+    """
+    if _QA_PATTERN.search(text):
+        return [(h.strip(), _drop_section_titles(b)) for h, b in _QA_PATTERN.findall(text)]
+    return _parse_plain_qa_pairs(text)
+
+
+def _drop_section_titles(body: str) -> str:
+    """The next section's **Title** lands at the end of the previous answer's body."""
+    keep = [ln for ln in body.split("\n")
+            if re.sub(r"^\*\*(.+)\*\*$", r"\1", ln.strip()) not in SECTIONS]
+    return "\n".join(keep).strip()
+
+
+def _parse_plain_qa_pairs(text: str) -> List[Tuple[str, str]]:
+    """Plain-text export: a paragraph that is a single short line ending in '?' is a
+    question header; everything up to the next header or section title is its answer.
+    The first paragraph is the document title and is skipped."""
+    paragraphs = [p.strip() for p in text.replace("\r\n", "\n").split("\n") if p.strip()]
+    pairs: List[Tuple[str, List[str]]] = []
+    for p in paragraphs[1:]:
+        if p.endswith("?") and len(p.split()) <= 15:
+            pairs.append((p, []))
+        elif p in SECTIONS:
+            continue
+        elif pairs:
+            pairs[-1][1].append(p)
+    return [(h, "\n\n".join(body)) for h, body in pairs if body]
+
+
+def missing_sections(review: str) -> List[str]:
+    """Section titles absent from the finished review - checked in code rather than
+    trusted, so a skipped title shows up in the app instead of in the published doc."""
+    present = {re.sub(r"^\*\*(.+)\*\*$", r"\1", ln.strip()) for ln in review.splitlines()}
+    return [s for s in SECTIONS if s not in present]
 
 
 def _slot_key_for_header(header: str) -> Optional[str]:
@@ -733,6 +772,13 @@ def build_output_spec(keyword: str, casino: str) -> str:
         f'The exact phrase "{keyword}" must appear verbatim somewhere in this review, '
         "reading naturally - anywhere is fine, it does not need its own answer.\n",
     ]
+    parts.append(
+        "The review is split into these five sections, in this order: "
+        + ", ".join(SECTIONS) + ". Open each section with its title alone on its own "
+        "line in bold, exactly as shown below (e.g. **General**), then its questions. "
+        "Every section title appears in every review, even if the section only ends "
+        "up with one question.\n"
+    )
     for section in SECTIONS:
         parts.append(f"\n**{section}**\n")
         parts.append(
@@ -1041,7 +1087,7 @@ def generate_review(
 
     feedback_block, feedback_count = "", 0
     if fetch_player_feedback:
-        feedback = cd.scrape_player_feedback(focus)
+        feedback = cd.scrape_player_feedback(focus, website=cell(row, COL["url"]))
         feedback_count = feedback.get("total_count", 0)
         feedback_block = cd.build_player_feedback_block(feedback)
 
@@ -1062,6 +1108,7 @@ def generate_review(
         "evolution_status": evolution_status,
         "player_feedback_count": feedback_count,
         "question_count": len(qa_pairs),
+        "missing_sections": missing_sections(review),
         "history_titles": [t for t, _ in history],
         "chars": len(review),
         "words": len(review.split()),
