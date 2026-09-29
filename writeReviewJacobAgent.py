@@ -24,11 +24,10 @@ directly: it relies entirely on written instructions with no grounding mechanism
 casinos" and a hand-maintained "BANNED OPENER PATTERNS" list, with nothing showing the
 model what it actually wrote last time. That's the identical failure diagnosed and
 fixed on Adam2 (a prompt can describe a constraint but the model has nothing to check
-itself against), just never diagnosed here before. The reflection mechanism below
-(collect_signatures/format_reflection, ported from Adam2's third and final iteration -
-see writeReviewAdam2's memory for why the first two attempts, a ban list and
-random.choice(), were both rejected) replaces that whole category of unfounded
-self-monitoring instruction. The BANNED OPENER PATTERNS list and the bare
+itself against), just never diagnosed here before. Showing the model its last few
+published reviews in full (assemble()) replaces that whole category of unfounded
+self-monitoring instruction. A per-question reflection block ported from Adam2 was
+tried on top of that and removed after it increased copying - see the PARSING note. The BANNED OPENER PATTERNS list and the bare
 "never repeat across reviews" instructions are deliberately NOT ported for this
 reason; the genuinely load-bearing formatting/terminology rules ARE.
 """
@@ -485,7 +484,7 @@ SECTION_FOR_SLOT = {
 #      comparison openers... never reuse a phrase in the entire review"). These ask
 #      the model to remember and avoid its own past output with nothing to check
 #      against - no prior review is ever shown for comparison in the legacy
-#      pipeline. That gap is exactly what the reflection mechanism below closes.
+#      pipeline. That gap is closed by showing the last few reviews in full.
 # Jakob's actual voice/register (contraction rate, sentence rhythm, real personality
 # texture) still needs measuring against genuine Jakob-written samples once Goran
 # provides them, the same way Adam's was - this VOICE constant carries the
@@ -585,57 +584,22 @@ def load_voice_samples() -> Optional[str]:
 
 
 # ----------------------------------------------------------------------------
-# REFLECTION - grouped by QUESTION SLOT, not by review
+# PARSING - question count and section check on the finished review
 # ----------------------------------------------------------------------------
-# Direct port of Adam2's third and final anti-repetition design (see
-# writeReviewAgent.py's collect_signatures/format_reflection and the project memory
-# for why the first two - a literal ban list, then random.choice() over a small
-# style menu - were both tried and rejected). The translation from narrative
-# sections to question slots is mechanical: instead of grouping "how General opened/
-# closed" across the last N reviews, group "how you answered THIS question" across
-# the last N reviews that asked it. Locked-header slots only ever show/reflect on
-# ANSWER wording (the header text is fixed, nothing to vary there); free-header slots
-# reflect on both the header phrasing and the answer.
+# A per-question "reflection" block (every past answer to each question, side by side)
+# used to sit here. Removed 2026-09-29 on measured evidence: once it actually reached
+# the live model, cross-casino shared 8-word phrases in a 4-review batch went from 34
+# to 207 - seeing the same sentence under the same question in several past reviews
+# worked as a template to copy, not a habit to notice. The full prior reviews are
+# still in the prompt (assemble()); that setup produced the lower figure.
 
 _QA_PATTERN = re.compile(r"^##\s*Q:\s*(.+?)\s*$\n+(.*?)(?=\n##\s*Q:|\Z)",
                         re.MULTILINE | re.DOTALL)
 
 
 def parse_qa_pairs(text: str) -> List[Tuple[str, str]]:
-    """(question header, answer body) pairs from a review, in either form it arrives in.
-
-    Markdown (the model's own output, local reviews_jakob/*.md) carries '## Q:' markers.
-    The live rolling window does not: history.py exports Drive docs as text/plain, where
-    the question headers are just bare lines. Only the markdown form used to be parsed,
-    which left the whole reflection block silently empty on the live app (found
-    2026-09-28 - 0 pairs from every Drive doc, and cross-review repetition to match).
-    """
-    if _QA_PATTERN.search(text):
-        return [(h.strip(), _drop_section_titles(b)) for h, b in _QA_PATTERN.findall(text)]
-    return _parse_plain_qa_pairs(text)
-
-
-def _drop_section_titles(body: str) -> str:
-    """The next section's **Title** lands at the end of the previous answer's body."""
-    keep = [ln for ln in body.split("\n")
-            if re.sub(r"^\*\*(.+)\*\*$", r"\1", ln.strip()) not in SECTIONS]
-    return "\n".join(keep).strip()
-
-
-def _parse_plain_qa_pairs(text: str) -> List[Tuple[str, str]]:
-    """Plain-text export: a paragraph that is a single short line ending in '?' is a
-    question header; everything up to the next header or section title is its answer.
-    The first paragraph is the document title and is skipped."""
-    paragraphs = [p.strip() for p in text.replace("\r\n", "\n").split("\n") if p.strip()]
-    pairs: List[Tuple[str, List[str]]] = []
-    for p in paragraphs[1:]:
-        if p.endswith("?") and len(p.split()) <= 15:
-            pairs.append((p, []))
-        elif p in SECTIONS:
-            continue
-        elif pairs:
-            pairs[-1][1].append(p)
-    return [(h, "\n\n".join(body)) for h, body in pairs if body]
+    """(question header, answer body) pairs from the model's markdown output."""
+    return [(h.strip(), b.strip()) for h, b in _QA_PATTERN.findall(text)]
 
 
 def missing_sections(review: str) -> List[str]:
@@ -643,99 +607,6 @@ def missing_sections(review: str) -> List[str]:
     trusted, so a skipped title shows up in the app instead of in the published doc."""
     present = {re.sub(r"^\*\*(.+)\*\*$", r"\1", ln.strip()) for ln in review.splitlines()}
     return [s for s in SECTIONS if s not in present]
-
-
-def _slot_key_for_header(header: str) -> Optional[str]:
-    """Match a rendered header back to its QUESTION_SLOTS key, for locked headers
-    (exact match after casino-name substitution) and free ones (best-effort - a free
-    header's wording changes each time, so this only recognizes the ones that happen
-    to still resemble their template; unmatched free headers are still shown under
-    the dynamic long-tail).
-    """
-    norm = re.sub(r"\s+", " ", header.strip().lower())
-    for slot in QUESTION_SLOTS:
-        candidates = slot.get("header_options") or ([slot["header"]] if slot.get("header") else [])
-        for tmpl in candidates:
-            pattern = re.escape(tmpl).replace(re.escape("{casino}"), r".+?")
-            if re.fullmatch(pattern, norm, re.IGNORECASE):
-                return slot["key"]
-    return None
-
-
-def collect_qa_signatures(history: List[Tuple[str, str]]) -> Dict[str, list]:
-    """Structured extraction: per-slot (title, header, answer) across the window,
-    plus recurring phrases and comparison casinos - same computed-not-hand-picked
-    approach as Adam2's recurring_phrases(), reused via its normalization logic
-    where it doesn't need the narrative-section assumptions baked in.
-
-    Full answers, not truncated - confirmed empirically (2026-09-18) that a [:300]/
-    [:200] cutoff here silently hid exactly the repetition it existed to catch: a
-    comparison clause near the end of an answer (where "for bigger stakes, X commits
-    to..." style sentences tend to land) fell past the cutoff in every highroller
-    answer checked, so the model had never actually seen its own prior wording for
-    the part that was repeating verbatim. The fix is showing it the real material,
-    not adding another instruction telling it what not to write.
-    """
-    by_slot: Dict[str, list] = {}
-    long_tail: List[Tuple[str, str, str]] = []
-
-    for title, text in history:
-        for header, answer in parse_qa_pairs(text):
-            key = _slot_key_for_header(header)
-            if key:
-                by_slot.setdefault(key, []).append((title, header, answer))
-            else:
-                long_tail.append((title, header, answer))
-
-    return {"by_slot": by_slot, "long_tail": long_tail[-15:]}
-
-
-def format_qa_reflection(sig: Dict[str, list]) -> str:
-    """The 'reread your own last few reviews' block, grouped by question slot."""
-    by_slot, long_tail = sig["by_slot"], sig["long_tail"]
-    if not by_slot and not long_tail:
-        return ""
-
-    out = [
-        "A LOOK AT YOUR OWN LAST FEW REVIEWS - read this the way you'd reread your "
-        "own recent drafts before starting a new one, not as a list of rules. Below "
-        "is how you've answered each recurring question, grouped by question so a "
-        "reused sentence is obvious at a glance.\n"
-        "Every fact and number below belongs to THAT casino on THAT date, not the "
-        "casino you're writing about now - a wagering multiplier, a payout time, a "
-        "cap, a country count, all of it is specific to the bracketed title it's "
-        "filed under. Never state one of these as if it were true of the current "
-        "casino, and never use another casino's name here unless THE FIELD in this "
-        "review's own dossier confirms that fact for that casino - if you want a "
-        "real comparison, pull the comparison casino's actual figure from THE FIELD, "
-        "not from what it said in an old review.\n"
-        "The TOPIC each question covers is fixed and does not need to change. What "
-        "matters is whether you're reaching for the same SENTENCE to answer it. If "
-        "two entries under the same question are basically the same words in the "
-        "same order, answer it a genuinely different way this time - different "
-        "opening move, different angle into the fact, different rhythm. Some overlap "
-        "is just the facts having the same shape (a 24/7-live-chat answer will always "
-        "say it's the baseline, there's only so many ways to say that), so use "
-        "judgment: is this wording load-bearing, or a groove you're stuck in?",
-    ]
-
-    for slot in QUESTION_SLOTS:
-        entries = by_slot.get(slot["key"])
-        if not entries:
-            continue
-        out.append(f"\n  \"{slot['header'] or slot['key']}\":")
-        out += [f'    [{t}] Q: "{h}" A: "{a}"' for t, h, a in entries]
-
-    if long_tail:
-        out.append(
-            "\n  Recent dynamic/comment-driven Q&As (both the QUESTION WORDING and "
-            "the answer are free to vary here - these have no fixed form to begin "
-            "with, but the same 'don't reuse a construction out of habit' judgment "
-            "applies):"
-        )
-        out += [f'    [{t}] Q: "{h}" A: "{a}"' for t, h, a in long_tail]
-
-    return "\n".join(out)
 
 
 # ----------------------------------------------------------------------------
@@ -823,7 +694,10 @@ Before you write, think it through:
    - a game count, a crypto count, a limit, a feature that's new or gone since
    then. State the change plainly ("up from X", "no longer offers Y") using the
    time-since note provided. Don't force a delta that isn't there; not every
-   question needs one.
+   question needs one. If you suspect a difference is a recount or a data-entry
+   error rather than a real change, you don't know it's a change - use the current
+   figure without comparing it to the old one, and raise the doubt in a line at the
+   very end of your output starting with 'DATA FLAG:' instead, not in the review.
 5. Manual comments: check whether each one strengthens an existing answer above
    before creating a new Q&A for it. Only create a new one if it's genuinely
    unrelated to every existing question and has enough substance to justify its own
@@ -834,10 +708,9 @@ Before you write, think it through:
    sentiment questions if the feedback actually covers those topics. Follow the
    platform-naming and generalization rules in the dossier's PLAYER FEEDBACK block
    exactly.
-7. Read the reflection section below, if there is one, the way you'd reread your
-   own last few drafts. It's grouped by question so a repeated sentence is visible
-   at a glance. Nothing in it is forbidden - use judgment about what's a genuine
-   habit worth breaking versus what's just how the facts have to be stated.
+7. The last few published reviews are shown in full below, if there are any.
+   Reread them the way you'd reread your own recent drafts before starting a new
+   one, then write this one in your own words rather than theirs.
 8. Never invent a feature, number, or name not in the dossier. Every fact traces to
    the data below.
 9. If a slot's guidance tells you to verify something with web search (legit,
@@ -896,7 +769,6 @@ def assemble(
     if feedback_block:
         parts += [feedback_block, ""]
 
-    sig: Dict[str, list] = {"by_slot": {}, "long_tail": []}
     if history:
         parts.append(
             f"THE LAST {len(history)} REVIEWS PUBLISHED (newest first). Read them for "
@@ -904,10 +776,6 @@ def assemble(
         )
         for title, text in history:
             parts.append(f"----- BEGIN PRIOR REVIEW: {title} -----\n{text}\n----- END -----\n")
-        sig = collect_qa_signatures(history)
-        reflection = format_qa_reflection(sig)
-        if reflection:
-            parts.append(reflection)
         parts.append("")
     else:
         parts.append("(No prior reviews available for comparison this run.)\n")
@@ -915,7 +783,7 @@ def assemble(
     parts.append(build_output_spec(keyword, focus_name))
     parts.append("")
     parts.append(TASK)
-    return system_blocks, "\n".join(parts), sig
+    return system_blocks, "\n".join(parts)
 
 
 # ----------------------------------------------------------------------------
@@ -1091,7 +959,7 @@ def generate_review(
         feedback_count = feedback.get("total_count", 0)
         feedback_block = cd.build_player_feedback_block(feedback)
 
-    system_blocks, user_text, sig = assemble(
+    system_blocks, user_text = assemble(
         db, row, keyword, history, focus, evolution_context, feedback_block
     )
     review, usage = generate(system_blocks, user_text, effort, max_tokens, progress=progress)
@@ -1176,7 +1044,7 @@ def main() -> None:
             cd.fetch_evolution_context(db.casino_id(row), focus)
         print(f"Evolution lookup: {status}", file=sys.stderr)
         feedback_block = "" if args.no_feedback else "(scraper not run in dry-run)"
-        system_blocks, user_text, _ = assemble(
+        system_blocks, user_text = assemble(
             db, row, args.keyword or f"{focus} Casino Review", history, focus,
             evolution_context, feedback_block,
         )
