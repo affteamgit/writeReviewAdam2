@@ -35,3 +35,45 @@ def test_prompt_has_full_prior_reviews_but_no_per_question_block():
                               [("BitStarz Review", prior)], "7Bit", "", "")
     assert "BEGIN PRIOR REVIEW: BitStarz Review" in user_text
     assert "A LOOK AT YOUR OWN LAST FEW REVIEWS" not in user_text
+
+
+# ----------------------------------------------------------------------------
+# repetition_check - the code half (finding reuse). The rewrite half calls the API.
+# ----------------------------------------------------------------------------
+
+import repetition_check as rc  # noqa: E402
+
+NAMES = ["Roobet", "Thrill", "7Bit", "BC.Game"]
+
+
+def test_reuse_found_across_casinos_with_names_masked():
+    prior = [("7Bit Review", "7Bit review\n\nSignup is email-only, but the terms set no "
+                             "threshold that triggers a document request.")]
+    review = ("# Roobet review\n\n## Q: Can I stay anonymous at Roobet?\n"
+              "Signup is email-only, but the terms set no threshold that triggers a "
+              "document request. Support answers fast.\n")
+    flagged = rc.find_overlaps(review, prior, NAMES)
+    assert [f["sentence"] for f in flagged] == [
+        "Signup is email-only, but the terms set no threshold that triggers a document request."]
+    assert flagged[0]["title"] == "7Bit Review"
+
+
+def test_headers_titles_and_flags_are_never_flagged():
+    prior = [("Thrill Review", "Thrill review\n\nCan I use a VPN to play at Thrill?\n\nGeneral")]
+    review = ("# Roobet review\n\n**General**\n\n## Q: Can I use a VPN to play at Roobet?\n"
+              "No.\n\nDATA FLAG: the database lists 5,000 games while the old review said 7,000.\n")
+    assert rc.find_overlaps(review, prior, NAMES) == []
+
+
+def test_only_the_later_of_a_repeated_pair_in_one_review_is_flagged():
+    review = ("# Roobet review\n\n## Q: A?\nKYC with no floor is the real risk at this site today.\n\n"
+              "## Q: B?\nAgain, KYC with no floor is the real risk at this site today.\n")
+    flagged = rc.find_overlaps(review, [], NAMES)
+    assert len(flagged) == 1 and flagged[0]["sentence"].startswith("Again")
+    assert flagged[0]["title"] == "this review"
+
+
+def test_unique_sentences_pass():
+    prior = [("Thrill Review", "Thrill review\n\nThe library sits at 3,000 titles and leans on slots.")]
+    review = "# Roobet review\n\n## Q: Games?\nRoobet carries about 8,000 games across 70 studios.\n"
+    assert rc.find_overlaps(review, prior, NAMES) == []

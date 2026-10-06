@@ -40,6 +40,7 @@ import config
 import gdocs
 import history as history_mod
 import linking
+import repetition_check
 import writeReviewAgent as adam_agent
 import writeReviewJacobAgent as jacob_agent
 
@@ -196,9 +197,15 @@ def main() -> None:
                                     help="A second Opus pass that only fixes rule breaks. "
                                          "Adds cost and time; off by default.")
             do_link = st.checkbox("Add internal links to other casino reviews", value=True)
+            do_repetition_check = False
         else:
             do_revise = False
             do_link = False
+            do_repetition_check = st.checkbox(
+                "Repetition check after writing", value=True,
+                help="Compares the finished review with the last 20 in the folder, then "
+                     "rewrites only the sentences that reuse their wording. Adds roughly "
+                     "a minute and a few tens of cents.")
             fetch_evolution = st.checkbox(
                 "Compare against the previously published review", value=True,
                 help="Reads the casino's last BCK review from the WordPress DB to "
@@ -269,6 +276,25 @@ def main() -> None:
                 fetch_player_feedback=fetch_player_feedback,
                 progress=on_progress,
             )
+        repetition = None
+        if site_key != "gamblineers" and do_repetition_check:
+            status.write("Checking for wording reused from the last 20 reviews...")
+            corpus = history_mod.load_window(drive, folder_id, casino, n=20,
+                                             exclude_same_casino=False)
+            try:
+                repetition = repetition_check.check_and_fix(
+                    result["review"], corpus,
+                    casino_names=[jacob_agent.cell(r, 0) for r in db.data_rows],
+                    model=jacob_agent.MODEL, progress=on_progress,
+                    drain=jacob_agent._drain_with_progress,
+                )
+                result["review"] = repetition["review"]
+                result["cost"] += jacob_agent.cost_of(repetition["usage"])
+            except Exception as e:  # noqa: BLE001
+                # Fail open: the written review is already paid for and fine to publish.
+                status.write(f"Repetition check failed, keeping the review as written: "
+                             f"{type(e).__name__}: {e}")
+
         # DATA FLAG lines are notes for us, shown in the warning box below - never
         # part of the published document.
         review = "\n".join(ln for ln in result["review"].splitlines()
@@ -339,6 +365,22 @@ def main() -> None:
 
     for flag in result["data_flags"]:
         st.warning("Source data problem reported by the model:\n\n" + flag.replace("$", "\\$"))
+
+    if repetition is not None:
+        found, applied, left = (len(repetition["found"]), len(repetition["applied"]),
+                                len(repetition["remaining"]))
+        st.caption(f"Repetition check against {repetition['compared_against']} earlier "
+                   f"reviews: {found} sentence(s) reused wording, {applied} rewritten, "
+                   f"{left} still overlapping (re-measured after the rewrite).")
+        if applied:
+            with st.expander(f"What the repetition check changed ({applied})"):
+                for old, new in repetition["applied"]:
+                    st.markdown(f"- ~~{old}~~\n\n  {new}".replace("$", "\\$"))
+        if left:
+            with st.expander(f"Still overlapping ({left})"):
+                for x in repetition["remaining"]:
+                    st.markdown(f"- {x['sentence']}\n\n  *{x['title']}:* {x['prior_sentence']}"
+                                .replace("$", "\\$"))
 
     if result.get("missing_sections"):
         st.warning("Missing section title(s): " + ", ".join(result["missing_sections"]))
