@@ -77,3 +77,23 @@ def test_unique_sentences_pass():
     prior = [("Thrill Review", "Thrill review\n\nThe library sits at 3,000 titles and leans on slots.")]
     review = "# Roobet review\n\n## Q: Games?\nRoobet carries about 8,000 games across 70 studios.\n"
     assert rc.find_overlaps(review, prior, NAMES) == []
+
+
+def test_every_earlier_version_of_a_sentence_is_listed_for_the_rewrite():
+    prior = [("BC.Game Review", "BC.Game review\n\nThe live section rests on Evolution and "
+                                "Pragmatic Play, the two names I look for."),
+             ("Bspin Review", "Bspin review\n\nThe live section is built on Evolution and "
+                              "Pragmatic Play, exactly the two I look for.")]
+    review = ("# Roobet review\n\n## Q: Games?\nThe live section is built on Evolution and "
+              "Pragmatic Play, the two names I look for.\n")
+    flagged = rc.find_overlaps(review, prior, NAMES)
+    assert len(flagged) == 1
+    assert {mt["title"] for mt in flagged[0]["matches"]} == {"BC.Game Review", "Bspin Review"}
+    prompt = rc._rewrite_prompt(review, flagged)
+    assert "(BC.Game Review)" in prompt and "(Bspin Review)" in prompt
+
+
+def test_writer_prompt_has_no_seeds_the_mentor_flagged():
+    prompt = j.VOICE + j.TASK + "".join(s["guidance"] for s in j.QUESTION_SLOTS)
+    for seed in ("email-only", "has no floor", "real signal for", "name the actual providers"):
+        assert seed not in prompt, seed

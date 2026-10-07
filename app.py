@@ -191,21 +191,25 @@ def main() -> None:
         effort = st.select_slider("Model effort", ["low", "medium", "high", "xhigh", "max"],
                                   value="high",
                                   help="Higher effort thinks longer. 'high' is the tested default.")
-        window = st.slider("Prior reviews fed back in (anti-repetition)", 0, 8, 5)
         if site_key == "gamblineers":
+            window = st.slider("Prior reviews fed back in (anti-repetition)", 0, 8, 5)
             do_revise = st.checkbox("Run the fact/voice self-check pass", value=False,
                                     help="A second Opus pass that only fixes rule breaks. "
                                          "Adds cost and time; off by default.")
             do_link = st.checkbox("Add internal links to other casino reviews", value=True)
             do_repetition_check = False
         else:
+            # BCK: no past reviews in the writing prompt - measured 2026-10-06, the writer
+            # copied their sentences instead of avoiding them. The repetition check below
+            # does the cross-review comparison instead.
+            window = 0
             do_revise = False
             do_link = False
             do_repetition_check = st.checkbox(
                 "Repetition check after writing", value=True,
-                help="Compares the finished review with the last 20 in the folder, then "
-                     "rewrites only the sentences that reuse their wording. Adds roughly "
-                     "a minute and a few tens of cents.")
+                help="Compares the finished review with the last 20 reviews of OTHER "
+                     "casinos in the folder, then rewrites only the sentences that reuse "
+                     "their wording. Adds roughly a minute and a few tens of cents.")
             fetch_evolution = st.checkbox(
                 "Compare against the previously published review", value=True,
                 help="Reads the casino's last BCK review from the WordPress DB to "
@@ -279,13 +283,16 @@ def main() -> None:
         repetition = None
         if site_key != "gamblineers" and do_repetition_check:
             status.write("Checking for wording reused from the last 20 reviews...")
-            corpus = history_mod.load_window(drive, folder_id, casino, n=20,
-                                             exclude_same_casino=False)
+            # The casino's own earlier reviews are excluded: that's the page this review
+            # replaces, so sharing its wording isn't repetition a reader sees.
+            corpus = history_mod.load_window(drive, folder_id, casino, n=20)
             try:
                 repetition = repetition_check.check_and_fix(
                     result["review"], corpus,
                     casino_names=[jacob_agent.cell(r, 0) for r in db.data_rows],
-                    model=jacob_agent.MODEL, progress=on_progress,
+                    model=jacob_agent.MODEL,
+                    voice=jacob_agent.VOICE + "\n\n" + (jacob_agent.load_voice_samples() or ""),
+                    progress=on_progress,
                     drain=jacob_agent._drain_with_progress,
                 )
                 result["review"] = repetition["review"]

@@ -179,9 +179,8 @@ QUESTION_SLOTS = [
             "could do better; 5+ missing = name 2-3, casino needs to catch up. HARD "
             "LIMIT: never name more than 5 provider names total in this answer "
             "(present + missing combined) - focus on what's missing, not what's "
-            "present. Evolution and Pragmatic Play both present is a real signal for "
-            "live-game quality; both missing is a real gap - work that in wherever it "
-            "fits naturally, it doesn't need to be its own sentence every time. NEVER "
+            "present. If Evolution or Pragmatic Play is missing, that's a real gap for "
+            "live games and worth saying; when both are there, it needs no comment. NEVER "
             "state the tracked total or a fraction of it to the reader ('12 of the 13 "
             "major studios', 'I check for 13 studios') - that exposes the methodology. "
             "Describe coverage in the "
@@ -198,8 +197,8 @@ QUESTION_SLOTS = [
             "Always call in-house titles 'Originals', never 'in-house games'. Short "
             "and factual only, no explanation of what these are or why they matter: "
             "(1) Originals - yes/no, count if available; (2) provably fair - yes/no, "
-            "name the actual providers if present (do not guess - only ones that "
-            "genuinely appear in this casino's provider list); (3) if missing either, "
+            "without naming which providers supply the provably fair games; (3) if "
+            "missing either, "
             "recommend 1-2 alternatives from THE FIELD. 2-3 sentences max."
         ),
     },
@@ -209,9 +208,10 @@ QUESTION_SLOTS = [
         "locked": False,
         "always_ask": False,
         "guidance": (
-            "Only answer if the casino HAS this filter (works or broken) - if it "
-            "simply doesn't have RTP/volatility filtering and nothing is broken, skip "
-            "this slot entirely, don't mention the absence. If present and working, "
+            "Only answer if the MANUAL COMMENTS say something about RTP or volatility "
+            "filtering at this casino - the data field alone is not enough, skip this "
+            "slot entirely without it, and don't mention the absence. Build the answer "
+            "on what the comment says. If present and working, "
             "frame as a genuine positive for informed play. If present but broken, "
             "explain the problem and recommend an alternative from THE FIELD with "
             "working filters."
@@ -229,10 +229,7 @@ QUESTION_SLOTS = [
             "day'; 24-72h: 'up to a few days'; 72h+: 'more than three days') when no "
             "exact figure exists. If the terms use deliberately vague language with no "
             "number, say so plainly - that's harder to dispute, not a neutral fact. "
-            "A vague or absent timeframe has no floor at exactly the moment a cashout "
-            "gets pulled for manual review - that's when it actually costs the player "
-            "something. Bring that in only when it's genuinely the relevant point, in "
-            "your own words. Never compare to another casino or discuss player feedback here - "
+            "Never compare to another casino or discuss player feedback here - "
             "feedback about withdrawals has its own slot."
         ),
     },
@@ -243,7 +240,9 @@ QUESTION_SLOTS = [
         "always_ask": True,
         "guidance": (
             "Non-monetary restrictions only - KYC and AML wagering, not limits (covered "
-            "elsewhere). KYC: what triggers it, whether a review-time is stated (use "
+            "elsewhere). This is the one answer in the review that covers KYC in detail; "
+            "the anonymity and highroller answers don't repeat it. Signup requirements "
+            "belong to the anonymity answer, not here. KYC: what triggers it, whether a review-time is stated (use "
             "the exact figure, distinguish 'time for you to submit docs' from 'time for "
             "the casino to review them' - only the latter matters here); 0 hours/no KYC "
             "is a genuine positive, say so. AML: 1x is standard, don't mention it; "
@@ -385,13 +384,11 @@ QUESTION_SLOTS = [
         "locked": True,
         "always_ask": True,
         "guidance": (
-            "Covers the FULL player journey - signup, deposit, play, AND withdraw, not "
-            "just registration. If genuinely anonymous (email-only signup, no "
-            "mandatory KYC up to a threshold), say so and name the threshold if the "
-            "terms state one; if the terms only have the standard 'we reserve the "
-            "right to require KYC' boilerplate, ignore it; if no threshold is stated "
-            "at all beyond that boilerplate, the honest picture is that KYC has no "
-            "floor - make sure the reader understands that risk, in your own words. "
+            "What a player has to hand over at each step - signup, deposit, play and "
+            "withdrawal. KYC triggers and review times are covered in the withdrawal "
+            "restrictions answer: here, say in one clause whether withdrawing can "
+            "require ID, without repeating that detail. If the terms only have the "
+            "standard 'we reserve the right to require KYC' boilerplate, ignore it. "
             "If not anonymous, be specific about what's required and at which "
             "stage, and recommend 1-2 anonymous alternatives from THE FIELD."
         ),
@@ -422,7 +419,9 @@ QUESTION_SLOTS = [
             "deposit is $150,000 of required wagering, say so if relevant); (4) track "
             "record from player feedback if available, specifically on large "
             "withdrawals - skip this one criterion if no feedback exists, don't "
-            "mention its absence. Give a clear verdict either way, citing the actual "
+            "mention its absence. KYC is covered in the withdrawal restrictions answer "
+            "- don't restate it here unless the terms set a verification rule that "
+            "applies specifically to large withdrawals. Give a clear verdict either way, citing the actual "
             "numbers. If not suitable, name the dealbreakers and recommend "
             "alternatives from THE FIELD. 3-6 sentences, direct, numbers not fluff."
         ),
@@ -521,9 +520,10 @@ games, Originals, game filters, minimum deposit amounts.
 - Never write a markdown link yourself. A separate verified pass adds links \
 afterward. Name casinos in plain text.
 - No em dash, no en dash. No hyphen used as a clause connector - hyphens are only for \
-compound words ("email-only") or number ranges ("24-48 hours").
+compound words ("fee-free") or number ranges ("24-48 hours").
 - Never say "in-house games" - say "Originals". Never say "Evolution Gaming" - say \
-"Evolution".
+"Evolution". Never use the word "stablecoin" - give the figure directly ("the \
+minimum deposit is $1", "withdrawals start at $21").
 - Never name more than 5 game providers, and never more than 5 cryptocurrencies, in \
 a single answer - present and missing combined. Focus on what's missing, not what's \
 present.
@@ -777,8 +777,6 @@ def assemble(
         for title, text in history:
             parts.append(f"----- BEGIN PRIOR REVIEW: {title} -----\n{text}\n----- END -----\n")
         parts.append("")
-    else:
-        parts.append("(No prior reviews available for comparison this run.)\n")
 
     parts.append(build_output_spec(keyword, focus_name))
     parts.append("")
