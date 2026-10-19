@@ -124,11 +124,6 @@ def main() -> None:
     if not check_password():
         return
 
-    if st.query_params.get("export") == "bck-reviews":  # TEMPORARY, see review_export.py
-        import review_export
-        review_export.render()
-        return
-
     st.title("Review Generator")
 
     site_label = st.selectbox("Website", list(SITES.keys()), key="site_select")
