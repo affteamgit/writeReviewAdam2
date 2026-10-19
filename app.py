@@ -142,7 +142,7 @@ def main() -> None:
 
     if site_key == "gamblineers":
         st.caption(
-            "Claude Opus 5, single pass. Facts come from the Casino Data sheet; the "
+            f"{adam_agent.MODEL}, single pass. Facts come from the Casino Data sheet; the "
             "last reviews in the Drive folder are fed back in so each new one reads "
             "differently."
         )
@@ -261,7 +261,7 @@ def main() -> None:
             status.write("Window: empty (first review in this folder, or none readable).")
 
         if site_key == "gamblineers":
-            status.write("Writing with Claude Opus 5 (effort=%s)..." % effort)
+            status.write("Writing with %s (effort=%s)..." % (adam_agent.MODEL, effort))
             result = adam_agent.generate_review(
                 db, casino,
                 keyword=keyword,
@@ -270,7 +270,7 @@ def main() -> None:
                 progress=on_progress,
             )
         else:
-            status.write("Writing with Claude Fable 5.1 (effort=%s)..." % effort)
+            status.write("Writing with %s (effort=%s)..." % (jacob_agent.MODEL, effort))
             result = jacob_agent.generate_review(
                 db, casino,
                 keyword=keyword,

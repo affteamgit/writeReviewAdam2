@@ -3,7 +3,7 @@
 writeReviewAgent.py - PROTOTYPE (option "C")
 
 An alternative to the writeReviewAdam.py assembly line. One strong model
-(Claude Opus 5) writes the whole review in a single pass, having been shown:
+(Claude Fable 5.1) writes the whole review in a single pass, having been shown:
 
   1. Adam's voice rules                       (stable, cached)
   2. Gamblineers' editorial criteria table    (stable, cached)
