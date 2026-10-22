@@ -80,6 +80,14 @@ def _link_patterns(text: str, pattern_url_pairs) -> str:
     four "**" delimiter characters are protected - so it comes out nested as
     **[text](url)**. The writer bolds competitor names often enough that skipping those
     meant most comparisons never got linked at all.
+
+    An all-lowercase match is skipped. Many review slugs are ordinary English words
+    once "-casino-review" is stripped (stake, reels, shuffle, flush, snatch, wolf...),
+    and the 2026-10-19 BetFury review came out with "lets you [stake](...) crypto" -
+    the verb linked to Stake's review. A brand in running text always carries its own
+    casing ("Stake", "7Bit", "mBit"), so lowercase is the one reliable sign the word
+    isn't a name. The trade-off: a brand the writer prints fully lowercase ("arcanebet")
+    goes unlinked, which is a missed link rather than a wrong one.
     """
     linked_text = text
     for pattern, url in pattern_url_pairs:
@@ -98,7 +106,7 @@ def _link_patterns(text: str, pattern_url_pairs) -> str:
         last_end = 0
         for match in pattern.finditer(linked_text):
             start, end = match.span()
-            if any(protected[start:end]):
+            if any(protected[start:end]) or match.group(0).islower():
                 continue
             pieces.append(linked_text[last_end:start])
             pieces.append(f"[{match.group(0)}]({url})")
